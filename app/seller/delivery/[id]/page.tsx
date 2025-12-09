@@ -39,9 +39,9 @@ type DeliveryDetail = {
   chosen_driver_id: string | null;
 
   // Төлбөр / маргааны нэмэлт талбарууд
-  seller_marked_paid?: boolean | null;
-  driver_confirmed_payment?: boolean | null;
-  closed_at?: string | null;
+  seller_marked_paid: boolean;
+  driver_confirmed_payment: boolean;
+  closed_at: string | null;
   dispute_reason?: string | null;
   dispute_opened_at?: string | null;
 };
@@ -64,7 +64,9 @@ type DriverBidRow = {
 
 // =================== 2. Туслах функцууд ===================
 
-function typeLabel(deliveryType: string | null): { icon: string; label: string } {
+function typeLabel(
+  deliveryType: string | null
+): { icon: string; label: string } {
   switch (deliveryType) {
     case "apartment":
       return { icon: "🏙", label: "Байр" };
@@ -312,8 +314,8 @@ export default function SellerDeliveryDetailPage() {
         price_mnt: d.price_mnt,
         delivery_type: d.delivery_type,
         chosen_driver_id: d.chosen_driver_id,
-        seller_marked_paid: d.seller_marked_paid,
-        driver_confirmed_payment: d.driver_confirmed_payment,
+        seller_marked_paid: !!d.seller_marked_paid,
+        driver_confirmed_payment: !!d.driver_confirmed_payment,
         closed_at: d.closed_at,
         dispute_reason: d.dispute_reason,
         dispute_opened_at: d.dispute_opened_at,
@@ -422,9 +424,7 @@ export default function SellerDeliveryDetailPage() {
   // =================== 8. Маргаан үүсгэх ===================
 
   const canOpenDispute =
-    !!delivery &&
-    delivery.status === "PICKED_UP" &&
-    !!delivery.chosen_driver_id 
+    !!delivery && delivery.status === "PICKED_UP" && !!delivery.chosen_driver_id;
 
   async function handleOpenDisputeConfirm() {
     if (!delivery || !user || !delivery.chosen_driver_id) return;
@@ -622,9 +622,23 @@ export default function SellerDeliveryDetailPage() {
     setMessage(null);
 
     try {
+      const newSellerMarked = !delivery.seller_marked_paid;
+
+      const willBeClosed =
+        newSellerMarked &&
+        delivery.driver_confirmed_payment &&
+        delivery.status !== "CLOSED" &&
+        delivery.status !== "CANCELLED";
+
       const { error } = await supabase
         .from("deliveries")
-        .update({ seller_marked_paid: true })
+        .update({
+          seller_marked_paid: newSellerMarked,
+          status: willBeClosed ? "CLOSED" : delivery.status,
+          closed_at: willBeClosed
+            ? new Date().toISOString()
+            : delivery.closed_at,
+        })
         .eq("id", delivery.id)
         .eq("seller_id", user.id);
 
@@ -636,10 +650,18 @@ export default function SellerDeliveryDetailPage() {
 
       setDelivery({
         ...delivery,
-        seller_marked_paid: true,
+        seller_marked_paid: newSellerMarked,
+        status: willBeClosed ? "CLOSED" : delivery.status,
+        closed_at: willBeClosed
+          ? new Date().toISOString()
+          : delivery.closed_at,
       });
 
-      setMessage("Жолоочид төлбөр шилжүүлснээ тэмдэглэлээ.");
+      setMessage(
+        newSellerMarked
+          ? "Жолоочид төлбөр шилжүүлснээ тэмдэглэлээ."
+          : "Жолоочид төлбөр шилжүүлээгүй гэж заслаа."
+      );
     } finally {
       setPayLoading(false);
     }
@@ -897,7 +919,8 @@ export default function SellerDeliveryDetailPage() {
                         </div>
                         <p className="text-[11px] text-slate-500">
                           Утас:{" "}
-                          {bid.driver?.phone || "утасны дугаар бүртгэгдээгүй"}
+                          {bid.driver?.phone ||
+                            "утасны дугаар бүртгэгдээгүй"}
                         </p>
                         <p className="text-[11px] text-slate-500">
                           {driverRatingText(bid.driver)}
@@ -1021,7 +1044,7 @@ export default function SellerDeliveryDetailPage() {
                   Та жолоочид төлбөр шилжүүлсэн гэж тэмдэглэсэн. Жолооч төлбөр
                   авснаа баталсны дараа энэ хүргэлт{" "}
                   <span className="font-semibold">“Хаагдсан”</span> төлөвт
-                  шилжинэ.
+                  автоматаар шилжинэ.
                 </p>
               )}
             </div>
@@ -1057,13 +1080,46 @@ export default function SellerDeliveryDetailPage() {
             </div>
           )}
 
+          {/* Төлбөрийн суммари – бүх төлөв дээр харуулна */}
+          <div className="border-t border-slate-100 pt-3 mt-2 space-y-1">
+            <p className="text-[11px] text-slate-500">
+              Худалдагч:{" "}
+              <span
+                className={
+                  sellerPaid
+                    ? "text-emerald-600 font-semibold"
+                    : "text-slate-700"
+                }
+              >
+                {sellerPaid ? "Жолоочид мөнгөө шилжүүлсэн" : "Мөнгөө шилжүүлээгүй"}
+              </span>
+            </p>
+            <p className="text-[11px] text-slate-500">
+              Жолооч:{" "}
+              <span
+                className={
+                  driverConfirmed
+                    ? "text-emerald-600 font-semibold"
+                    : "text-slate-700"
+                }
+              >
+                {driverConfirmed ? "Төлбөрөө бүрэн авсан" : "Баталгаажаагүй"}
+              </span>
+            </p>
+            {delivery.closed_at && (
+              <p className="text-[11px] text-slate-400">
+                Хаагдсан: {formatDateTime(delivery.closed_at)}
+              </p>
+            )}
+          </div>
+
           {/* CLOSED үед богино тайлбар */}
           {delivery.status === "CLOSED" && (
             <div className="border-t border-slate-100 pt-3 mt-2">
               <p className="text-xs text-slate-600">
                 Энэ хүргэлт{" "}
-                <span className="font-semibold">хаагдсан</span>. Төлбөр бүрэн
-                тооцоо хийгдсэн.
+                <span className="font-semibold">хаагдсан</span>. Хоёр талын
+                төлбөр бүрэн тооцоо хийгдсэн.
               </p>
             </div>
           )}
