@@ -198,6 +198,8 @@ export default function SellerDeliveryDetailPage() {
   const [showDisputeModal, setShowDisputeModal] = useState(false);
   const [disputeReason, setDisputeReason] = useState("");
   const [openingDispute, setOpeningDispute] = useState(false);
+  const [resolvingDispute, setResolvingDispute] = useState(false);
+
 
   // 🚫 Сонгогдсон жолоочийг цуцлах (seller-д блоклох)
   const [showCancelModal, setShowCancelModal] = useState(false);
