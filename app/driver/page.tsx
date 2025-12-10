@@ -5,6 +5,9 @@
 import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import { DeliveryStatus } from "@/lib/deliveryLogic";
+
+// ⬇⬇⬇ ОРОНД НЬ ЭНЭ 2 TYPE-ИЙГ ЛОКАЛААР АШИГЛАЯ ⬇⬇⬇
 
 type Role = "seller" | "driver";
 
@@ -16,22 +19,14 @@ type IncomeUser = {
   email: string;
 };
 
-type DeliveryStatus =
-  | "OPEN"
-  | "ASSIGNED"
-  | "PICKED_UP"
-  | "DELIVERED"
-  | "RETURNED"
-  | "CLOSED"
-  | "CANCELLED"
-  | "DISPUTE";
+// ⬆⬆⬆ ЭНЭ ХЭСЭГ НЬ БИДНИЙ lib/types.ts-ЫН ХУВИЛБАР ⬆⬆⬆
 
 type DriverTabId =
   | "OPEN"
   | "ASSIGNED"
-  | "PICKED_UP"
+  | "ON_ROUTE"
   | "DELIVERED"
-  | "RETURNED"
+  | "PAID"
   | "CLOSED"
   | "DISPUTE";
 
@@ -48,7 +43,6 @@ type DeliveryRow = {
   driver_confirmed_payment: boolean;
   chosen_driver_id: string | null;
 
-  // Жолооч энэ хүргэлт дээр хүсэлт илгээсэн эсэх
   hasBid: boolean;
 };
 
@@ -56,9 +50,9 @@ type DeliveryRow = {
 const DRIVER_TABS: { id: DriverTabId; label: string }[] = [
   { id: "OPEN",      label: "Нээлттэй" },
   { id: "ASSIGNED",  label: "Намайг сонгосон" },
-  { id: "PICKED_UP", label: "Замд" },
+  { id: "ON_ROUTE",  label: "Замд" },
   { id: "DELIVERED", label: "Хүргэсэн" },
-  { id: "RETURNED",  label: "Буцаасан" },
+  { id: "PAID",      label: "Төлбөр" },
   { id: "CLOSED",    label: "Хаагдсан" },
   { id: "DISPUTE",   label: "Маргаантай" },
 ];
@@ -96,7 +90,7 @@ function statusBadge(status: DeliveryStatus) {
         text: "Танд оноосон",
         className: "bg-sky-50 text-sky-700 border-sky-100",
       };
-    case "PICKED_UP":
+    case "ON_ROUTE":
       return {
         text: "Замд",
         className: "bg-indigo-50 text-indigo-700 border-indigo-100",
@@ -106,15 +100,15 @@ function statusBadge(status: DeliveryStatus) {
         text: "Хүргэсэн",
         className: "bg-slate-900 text-white border-slate-900",
       };
-    case "RETURNED":
+    case "PAID":
       return {
-        text: "Буцаасан",
-        className: "bg-amber-50 text-amber-800 border-amber-100",
+        text: "Төлбөр баталгаажсан",
+        className: "bg-emerald-900 text-emerald-50 border-emerald-900",
       };
     case "CLOSED":
       return {
         text: "Хаагдсан",
-        className: "bg-emerald-900 text-emerald-50 border-emerald-900",
+        className: "bg-slate-800 text-slate-50 border-slate-800",
       };
     case "CANCELLED":
       return {
@@ -156,7 +150,7 @@ function formatDateTime(iso: string) {
   );
 }
 
-// Табыгаар filter хийх
+// Табыгаар filter хийх (OPEN таб дээр дотор нь салаалах тул зөвхөн статус)
 function filterByTab(tab: DriverTabId, items: DeliveryRow[]): DeliveryRow[] {
   return items.filter((d) => {
     switch (tab) {
@@ -164,12 +158,12 @@ function filterByTab(tab: DriverTabId, items: DeliveryRow[]): DeliveryRow[] {
         return d.status === "OPEN";
       case "ASSIGNED":
         return d.status === "ASSIGNED";
-      case "PICKED_UP":
-        return d.status === "PICKED_UP";
+      case "ON_ROUTE":
+        return d.status === "ON_ROUTE";
       case "DELIVERED":
         return d.status === "DELIVERED";
-      case "RETURNED":
-        return d.status === "RETURNED";
+      case "PAID":
+        return d.status === "PAID";
       case "CLOSED":
         return d.status === "CLOSED";
       case "DISPUTE":
@@ -342,7 +336,7 @@ export default function DriverDashboardPage() {
         from_address: d.from_address,
         to_address: d.to_address,
         note: d.note,
-        status: d.status,
+        status: d.status as DeliveryStatus,
         created_at: d.created_at,
         price_mnt: d.price_mnt,
         delivery_type: d.delivery_type,
@@ -362,7 +356,35 @@ export default function DriverDashboardPage() {
     }
   }
 
-  // =================== 7. Гарах ===================
+  // =================== 7. Санал цуцлах ===================
+
+  async function handleCancelBid(deliveryId: string) {
+    if (!user) return;
+    try {
+      setError(null);
+      setMessage(null);
+
+      const { error: delError } = await supabase
+        .from("driver_bids")
+        .delete()
+        .eq("driver_id", user.id)
+        .eq("delivery_id", deliveryId);
+
+      if (delError) {
+        console.error(delError);
+        setError("Санал цуцлахад алдаа гарлаа.");
+        return;
+      }
+
+      setMessage("Таны санал амжилттай цуцлагдлаа.");
+      await fetchDeliveries(user.id);
+    } catch (e) {
+      console.error(e);
+      setError("Санал цуцлахад алдаа гарлаа.");
+    }
+  }
+
+  // =================== 8. Гарах ===================
 
   function handleLogout() {
     if (typeof window !== "undefined") {
@@ -371,9 +393,164 @@ export default function DriverDashboardPage() {
     router.push("/");
   }
 
-  // =================== 8. Жагсаалтын UI ===================
+  // =================== 9. Жагсаалтын UI ===================
 
-  function renderList(items: DeliveryRow[]) {
+  function renderList(items: DeliveryRow[], currentTab: DriverTabId) {
+    // OPEN таб дээр нээлттэй + миний саналуудыг тусад нь харуулна
+    if (currentTab === "OPEN") {
+      const openWithoutBid = items.filter((d) => !d.hasBid);
+      const openWithBid = items.filter((d) => d.hasBid);
+
+      if (openWithoutBid.length === 0 && openWithBid.length === 0) {
+        return (
+          <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-center text-xs text-slate-500">
+            Нээлттэй хүргэлт одоогоор алга байна.
+          </div>
+        );
+      }
+
+      const renderItem = (
+        d: DeliveryRow,
+        opts?: { dim?: boolean; showCancel?: boolean }
+      ) => {
+        const t = typeLabel(d.delivery_type);
+        const sb = statusBadge(d.status);
+
+        let subtitle = "";
+        if (d.status === "OPEN") {
+          subtitle = d.hasBid
+            ? "Та энэ хүргэлт дээр авах санал илгээсэн."
+            : "Энэ хүргэлтэд авах санал илгээгүй байна.";
+        }
+
+        const dimClass = opts?.dim ? "opacity-70" : "";
+
+        return (
+          <button
+            key={d.id}
+            type="button"
+            onClick={() =>
+              router.push(`/driver/delivery/${d.id}?tab=${activeTab}`)
+            }
+            className={
+              "w-full text-left rounded-2xl border border-slate-200 bg-white px-4 py-3 hover:border-emerald-300 hover:shadow-sm transition " +
+              dimClass
+            }
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex-1 space-y-1">
+                {/* Дээд мөр – ID + статус */}
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-xs font-semibold text-slate-900">
+                    #{d.id.slice(0, 6)}
+                  </span>
+                  <span
+                    className={
+                      "inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium " +
+                      sb.className
+                    }
+                  >
+                    {sb.text}
+                  </span>
+                  {d.status === "OPEN" && d.hasBid && (
+                    <span className="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-medium text-emerald-700">
+                      Хүсэлт илгээсэн
+                    </span>
+                  )}
+                </div>
+
+                {/* Төрөл, үнэ */}
+                <div className="flex items-center gap-2 text-[11px] text-slate-600">
+                  <span>{t.icon}</span>
+                  <span className="font-medium">{t.label}</span>
+                  <span className="text-slate-400">•</span>
+                  <span>{formatPrice(d.price_mnt)}</span>
+                </div>
+
+                {/* Хаягууд */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px] text-slate-600 mt-1">
+                  <div>
+                    <div className="text-[10px] font-semibold text-slate-500">
+                      АВАХ
+                    </div>
+                    <p>{shorten(d.from_address, 60)}</p>
+                  </div>
+                  <div>
+                    <div className="text-[10px] font-semibold text-slate-500">
+                      ХҮРГЭХ
+                    </div>
+                    <p>{shorten(d.to_address, 60)}</p>
+                  </div>
+                </div>
+
+                {/* Товч тайлбар + үүсгэсэн огноо */}
+                {d.note && (
+                  <p className="mt-1 text-[11px] text-slate-500">
+                    {shorten(d.note, 80)}
+                  </p>
+                )}
+
+                <p className="mt-1 text-[10px] text-slate-400">
+                  Үүсгэсэн: {formatDateTime(d.created_at)}
+                </p>
+
+                {subtitle && (
+                  <p className="mt-1 text-[10px] text-slate-500">{subtitle}</p>
+                )}
+              </div>
+
+              {/* Санал цуцлах товч (зөвхөн OPEN + hasBid үед) */}
+              {opts?.showCancel && (
+                <div className="flex flex-col items-end gap-1">
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void handleCancelBid(d.id);
+                    }}
+                    className="text-[10px] px-2 py-1 rounded-full border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100"
+                  >
+                    Саналаа цуцлах
+                  </button>
+                </div>
+              )}
+            </div>
+          </button>
+        );
+      };
+
+      return (
+        <div className="space-y-5">
+          {/* Нээлттэй, санал өгөөгүй захиалгууд */}
+          {openWithoutBid.length > 0 && (
+            <div className="space-y-2">
+              <p className="px-1 text-[11px] font-medium text-slate-600">
+                Нээлттэй захиалгууд
+              </p>
+              <div className="space-y-3">
+                {openWithoutBid.map((d) => renderItem(d))}
+              </div>
+            </div>
+          )}
+
+          {/* Миний өгсөн саналууд */}
+          {openWithBid.length > 0 && (
+            <div className="space-y-2">
+              <p className="px-1 text-[11px] font-medium text-slate-600">
+                Миний өгсөн саналууд
+              </p>
+              <div className="space-y-3">
+                {openWithBid.map((d) =>
+                  renderItem(d, { dim: true, showCancel: true })
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // Бусад табууд дээр өмнөх шигээ энгийн жагсаалт
     if (items.length === 0) {
       return (
         <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-center text-xs text-slate-500">
@@ -391,18 +568,18 @@ export default function DriverDashboardPage() {
           let subtitle = "";
           if (d.status === "OPEN") {
             subtitle = d.hasBid
-              ? "Та энэ хүргэлт дээр авах хүсэлт илгээсэн."
-              : "Энэ хүргэлтэд та хараахан авах хүсэлт илгээгээгүй.";
+              ? "Та энэ хүргэлт дээр авах санал илгээсэн."
+              : "Энэ хүргэлтэд та хараахан авах санал илгээгээгүй.";
           } else if (d.status === "ASSIGNED") {
             subtitle = "Энэ хүргэлт танд оноосон байна.";
-          } else if (d.status === "PICKED_UP") {
+          } else if (d.status === "ON_ROUTE") {
             subtitle = "Та барааг аваад хүргэлтэд гарсан.";
           } else if (d.status === "DELIVERED") {
             subtitle = "Энэ хүргэлт хүргэсэн төлөвт байна.";
-          } else if (d.status === "RETURNED") {
-            subtitle = "Энэ барааг буцаасан.";
+          } else if (d.status === "PAID") {
+            subtitle = "Төлбөр баталгаажсан хүргэлт.";
           } else if (d.status === "CLOSED") {
-            subtitle = "Төлбөрийн тооцоо бүрэн дууссан.";
+            subtitle = "Энэ хүргэлт бүрэн хаагдсан.";
           } else if (d.status === "DISPUTE") {
             subtitle = "Энэ хүргэлт маргаантай байна.";
           }
@@ -419,7 +596,7 @@ export default function DriverDashboardPage() {
               <div className="flex items-start justify-between gap-3">
                 <div className="flex-1 space-y-1">
                   {/* Дээд мөр – ID + статус */}
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <span className="text-xs font-semibold text-slate-900">
                       #{d.id.slice(0, 6)}
                     </span>
@@ -485,7 +662,7 @@ export default function DriverDashboardPage() {
     );
   }
 
-  // =================== 9. Ачаалалт / алдаа ===================
+  // =================== 10. Ачаалалт / алдаа ===================
 
   if (loadingUser || loadingList) {
     return (
@@ -513,7 +690,7 @@ export default function DriverDashboardPage() {
     {} as Record<DriverTabId, number>
   );
 
-  // =================== 10. Гол UI ===================
+  // =================== 11. Гол UI ===================
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -587,7 +764,9 @@ export default function DriverDashboardPage() {
         </div>
 
         {/* Жагсаалт */}
-        <section className="space-y-3">{renderList(filtered)}</section>
+        <section className="space-y-3">
+          {renderList(filtered, activeTab)}
+        </section>
       </main>
     </div>
   );

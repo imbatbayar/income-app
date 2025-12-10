@@ -5,6 +5,10 @@
 import { useEffect, useState } from "react";
 import { useRouter, useParams, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import {
+  DeliveryStatus,
+  canOpenDisputeForDriver as baseCanOpenDisputeForDriver,
+} from "@/lib/deliveryLogic";
 
 type Role = "seller" | "driver";
 
@@ -15,16 +19,6 @@ type IncomeUser = {
   phone: string;
   email: string;
 };
-
-type DeliveryStatus =
-  | "OPEN"
-  | "ASSIGNED"
-  | "PICKED_UP"
-  | "DELIVERED"
-  | "RETURNED"
-  | "CLOSED"
-  | "CANCELLED"
-  | "DISPUTE";
 
 type DeliveryDetail = {
   id: string;
@@ -42,10 +36,7 @@ type DeliveryDetail = {
   driver_confirmed_payment: boolean;
   closed_at: string | null;
 
-  // Буцаалттай холбоотой flag
-  return_rejected_by_driver: boolean;
-
-  // seller-ийн богино info
+  // seller info
   seller_name?: string | null;
   seller_phone?: string | null;
 };
@@ -90,7 +81,7 @@ function statusBadge(status: DeliveryStatus) {
         text: "Танд оноосон",
         className: "bg-sky-50 text-sky-700 border-sky-100",
       };
-    case "PICKED_UP":
+    case "ON_ROUTE":
       return {
         text: "Замд",
         className: "bg-indigo-50 text-indigo-700 border-indigo-100",
@@ -100,15 +91,15 @@ function statusBadge(status: DeliveryStatus) {
         text: "Хүргэсэн",
         className: "bg-slate-900 text-white border-slate-900",
       };
-    case "RETURNED":
+    case "PAID":
       return {
-        text: "Буцаасан",
-        className: "bg-amber-50 text-amber-800 border-amber-100",
+        text: "Төлбөр баталгаажсан",
+        className: "bg-emerald-900 text-emerald-50 border-emerald-900",
       };
     case "CLOSED":
       return {
         text: "Хаагдсан",
-        className: "bg-emerald-900 text-emerald-50 border-emerald-900",
+        className: "bg-slate-800 text-slate-50 border-slate-800",
       };
     case "CANCELLED":
       return {
@@ -156,24 +147,6 @@ function mapsUrl(addr: string | null) {
   return `https://maps.google.com/?q=${q}`;
 }
 
-// Маргаан нээж болох статустай эсэх (driver тал)
-function canOpenDisputeForDriver(
-  status: DeliveryStatus,
-  isThisDriverAssigned: boolean
-): boolean {
-  if (!isThisDriverAssigned) return false;
-  if (status === "DISPUTE" || status === "CLOSED" || status === "CANCELLED")
-    return false;
-
-  // ASSIGNED / PICKED_UP / DELIVERED / RETURNED үед л маргаан нээх
-  return (
-    status === "ASSIGNED" ||
-    status === "PICKED_UP" ||
-    status === "DELIVERED" ||
-    status === "RETURNED"
-  );
-}
-
 // =================== 3. Гол компонент ===================
 
 export default function DriverDeliveryDetailPage() {
@@ -189,7 +162,6 @@ export default function DriverDeliveryDetailPage() {
       ? idParam[0]
       : "";
 
-  // Хэрэв driver page дээр табтай бол ?tab=ACTIVE гэх мэтийг уншиж буцна
   const fromTab = searchParams.get("tab");
   const backUrl = fromTab ? `/driver?tab=${fromTab}` : "/driver";
 
@@ -205,9 +177,8 @@ export default function DriverDeliveryDetailPage() {
 
   // action-уудын loading
   const [requesting, setRequesting] = useState(false);
-  const [markingPickedUp, setMarkingPickedUp] = useState(false);
+  const [markingOnRoute, setMarkingOnRoute] = useState(false);
   const [markingDelivered, setMarkingDelivered] = useState(false);
-  const [markingReturned, setMarkingReturned] = useState(false);
   const [confirmPayLoading, setConfirmPayLoading] = useState(false);
 
   // Маргаан
@@ -274,7 +245,6 @@ export default function DriverDeliveryDetailPage() {
           seller_marked_paid,
           driver_confirmed_payment,
           closed_at,
-          return_rejected_by_driver,
           seller:seller_id (
             name,
             phone
@@ -299,7 +269,7 @@ export default function DriverDeliveryDetailPage() {
           from_address: d.from_address,
           to_address: d.to_address,
           note: d.note,
-          status: d.status,
+          status: d.status as DeliveryStatus,
           created_at: d.created_at,
           price_mnt: d.price_mnt,
           delivery_type: d.delivery_type,
@@ -307,7 +277,6 @@ export default function DriverDeliveryDetailPage() {
           seller_marked_paid: !!d.seller_marked_paid,
           driver_confirmed_payment: !!d.driver_confirmed_payment,
           closed_at: d.closed_at,
-          return_rejected_by_driver: !!d.return_rejected_by_driver,
           seller_name: d.seller?.name ?? null,
           seller_phone: d.seller?.phone ?? null,
         };
@@ -403,9 +372,8 @@ export default function DriverDeliveryDetailPage() {
     setMessage(null);
 
     let setter: (v: boolean) => void = () => {};
-    if (newStatus === "PICKED_UP") setter = setMarkingPickedUp;
+    if (newStatus === "ON_ROUTE") setter = setMarkingOnRoute;
     if (newStatus === "DELIVERED") setter = setMarkingDelivered;
-    if (newStatus === "RETURNED") setter = setMarkingReturned;
 
     setter(true);
 
@@ -424,88 +392,32 @@ export default function DriverDeliveryDetailPage() {
 
       setDelivery({ ...delivery, status: newStatus });
 
-      if (newStatus === "PICKED_UP") {
+      if (newStatus === "ON_ROUTE") {
         setMessage("Барааг авч, хүргэлтэд гарлаа гэж тэмдэглэлээ.");
       } else if (newStatus === "DELIVERED") {
         setMessage("Хүргэлтийг амжилттай дууссан гэж тэмдэглэлээ.");
-      } else if (newStatus === "RETURNED") {
-        setMessage("Барааг буцаасан гэж тэмдэглэлээ.");
       }
     } finally {
       setter(false);
     }
   }
 
-  async function handleMarkPickedUp() {
+  async function handleMarkOnRoute() {
     if (!delivery || !user) return;
     if (delivery.status !== "ASSIGNED" || delivery.chosen_driver_id !== user.id) {
       setMessage("Эхлээд энэ хүргэлт танд оноогдсон байх ёстой.");
       return;
     }
-    await updateStatus("PICKED_UP");
+    await updateStatus("ON_ROUTE");
   }
 
   async function handleMarkDelivered() {
     if (!delivery || !user) return;
-    if (delivery.status !== "PICKED_UP" || delivery.chosen_driver_id !== user.id) {
+    if (delivery.status !== "ON_ROUTE" || delivery.chosen_driver_id !== user.id) {
       setMessage("Зөвхөн замд байгаа хүргэлтийг хүргэсэн гэж тэмдэглэнэ.");
       return;
     }
     await updateStatus("DELIVERED");
-  }
-
-  async function handleMarkReturned() {
-    if (!delivery || !user) return;
-    if (delivery.status !== "PICKED_UP" || delivery.chosen_driver_id !== user.id) {
-      setMessage("Зөвхөн замд байгаа хүргэлтийг буцаасан гэж тэмдэглэнэ.");
-      return;
-    }
-    await updateStatus("RETURNED");
-  }
-
-  // === 8.1 Буцаалтыг ХҮЛЭЭН АВАХГҮЙ + хүргэлт хийгдсэн гэж тэмдэглэх ===
-
-  async function markDeliveredRejectReturn() {
-    if (!delivery || !user) return;
-    if (delivery.status !== "PICKED_UP" || delivery.chosen_driver_id !== user.id) {
-      setMessage(
-        "Зөвхөн замд байгаа, танд оноосон хүргэлтийн буцаалтыг хүлээн авахгүй гэж тэмдэглэнэ."
-      );
-      return;
-    }
-
-    setMarkingDelivered(true);
-    setError(null);
-    setMessage(null);
-
-    try {
-      const { error } = await supabase
-        .from("deliveries")
-        .update({
-          status: "DELIVERED",
-          return_rejected_by_driver: true,
-        })
-        .eq("id", delivery.id)
-        .eq("chosen_driver_id", user.id);
-
-      if (error) {
-        console.error(error);
-        setError("Буцаалтыг хүлээн авахгүй гэж тэмдэглэхэд алдаа гарлаа.");
-        return;
-      }
-
-      setDelivery({
-        ...delivery,
-        status: "DELIVERED",
-        return_rejected_by_driver: true,
-      });
-
-      setMessage(
-        "Буцаалтыг хүлээн авахгүй, хүргэлт хийгдсэн гэж тэмдэглэлээ."
-      );
-    } finally {
-      setMarkingDelivered(false);
-    }
   }
 
   // =================== 9. Төлбөр авснаа батлах (driver_confirmed_payment) ===================
@@ -579,7 +491,9 @@ export default function DriverDeliveryDetailPage() {
     delivery.chosen_driver_id === user.id;
 
   const canOpenDispute =
-    !!delivery && canOpenDisputeForDriver(delivery.status, isThisDriverAssigned);
+    !!delivery &&
+    isThisDriverAssigned &&
+    baseCanOpenDisputeForDriver(delivery.status);
 
   async function handleOpenDisputeConfirm() {
     if (!delivery || !user) return;
@@ -657,7 +571,7 @@ export default function DriverDeliveryDetailPage() {
   const hasOwnBid = !!ownBid;
   const isOpen = delivery.status === "OPEN";
   const isAssigned = delivery.status === "ASSIGNED" && isThisDriverAssigned;
-  const isPickedUp = delivery.status === "PICKED_UP" && isThisDriverAssigned;
+  const isOnRoute = delivery.status === "ON_ROUTE" && isThisDriverAssigned;
   const isDelivered = delivery.status === "DELIVERED" && isThisDriverAssigned;
 
   // =================== 12. Гол UI ===================
@@ -729,24 +643,6 @@ export default function DriverDeliveryDetailPage() {
             нээгдсэн. Системийн админ асуудлыг шалгаж байгаа.
           </div>
         )}
-
-        {delivery.status === "RETURNED" && (
-          <div className="rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3 text-xs text-amber-800">
-            Энэ хүргэлт <span className="font-semibold">буцаасан</span> төлөвт
-            байна.
-          </div>
-        )}
-
-        {delivery.return_rejected_by_driver &&
-          delivery.status === "DELIVERED" && (
-            <div className="rounded-2xl border border-rose-100 bg-rose-50 px-4 py-3 text-xs text-rose-800">
-              Энэ хүргэлт дээр худалдан авагч{" "}
-              <span className="font-semibold">буцаалт хийхийг хүссэн</span>,
-              жолооч буцаалтыг{" "}
-              <span className="font-semibold">хүлээн аваагүй</span>. Таны зүгээс
-              хүргэлт хийгдсэн гэж тэмдэглэсэн байна.
-            </div>
-          )}
 
         {message && (
           <div className="rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-2 text-xs text-emerald-800">
@@ -861,8 +757,8 @@ export default function DriverDeliveryDetailPage() {
             </div>
           )}
 
-          {/* 3.2 – Танд оноосон үед: Пикап / Хүргэсэн / Буцаалт */}
-          {(isAssigned || isPickedUp || isDelivered) && (
+          {/* 3.2 – Танд оноосон / Замд / Хүргэсэн үеийн товчнууд */}
+          {(isAssigned || isOnRoute || isDelivered) && (
             <div className="border-b border-slate-100 pb-3 mb-2 space-y-2">
               {isAssigned && (
                 <div className="flex flex-wrap items-center justify_between gap-2">
@@ -872,70 +768,33 @@ export default function DriverDeliveryDetailPage() {
                     тэмдэглэнэ.
                   </p>
                   <button
-                    onClick={handleMarkPickedUp}
-                    disabled={markingPickedUp}
+                    onClick={handleMarkOnRoute}
+                    disabled={markingOnRoute}
                     className="text-[11px] px-4 py-2 rounded-full bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-60"
                   >
-                    {markingPickedUp ? "Тэмдэглэж байна…" : "Барааг авлаа"}
+                    {markingOnRoute ? "Тэмдэглэж байна…" : "Барааг авлаа"}
                   </button>
                 </div>
               )}
 
-              {isPickedUp && (
+              {isOnRoute && (
                 <div className="space-y-2">
                   <p className="text-xs text-slate-600">
-                    Та барааг авсан байна. Хүргэлт амжилттай дууссан бол{" "}
-                    <span className="font-medium">“Хүргэлт хийсэн”</span>, авах
-                    хүн бүтээгдэхүүнийг хүлээн авахаас татгалзаж, та буцааж
-                    аваачсан бол{" "}
-                    <span className="font-medium">
-                      “Буцаалтыг хүлээн авч буцаасан”
-                    </span>
-                    , харин буцаалт хийхийг{" "}
-                    <span className="font-medium">
-                      ХҮЛЭЭН АВАХГҮЙ (буцааж явахгүй, хүргэлтээ хийсэн гэж
-                      үзэж байгаа)
-                    </span>{" "}
-                    бол{" "}
-                    <span className="font-medium">
-                      “Буцаалтыг хүлээн авахгүй”
-                    </span>{" "}
-                    гэж тэмдэглэнэ.
+                    Та барааг авсан, замд явж байна. Хүргэлт амжилттай дууссан
+                    үед{" "}
+                    <span className="font-medium">“Хүргэлт хийсэн”</span> гэж
+                    тэмдэглэнэ.
+                    Хэрвээ асуудал гарвал (хаяг олдохгүй, төлбөр өгөхгүй гэх
+                    мэт) дараа нь{" "}
+                    <span className="font-medium">маргаан нээх</span> боломжтой.
                   </p>
-                  <div className="flex flex-wrap gap-2">
-                    {/* Энгийн хүргэлт хийсэн */}
-                    <button
-                      onClick={handleMarkDelivered}
-                      disabled={markingDelivered}
-                      className="text-[11px] px-4 py-2 rounded-full bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-60"
-                    >
-                      {markingDelivered
-                        ? "Тэмдэглэж байна…"
-                        : "Хүргэлт хийсэн"}
-                    </button>
-
-                    {/* Буцаалтыг ХҮЛЭЭН АВЧ буцаасан */}
-                    <button
-                      onClick={handleMarkReturned}
-                      disabled={markingReturned}
-                      className="text-[11px] px-4 py-2 rounded-full border border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100 disabled:opacity-60"
-                    >
-                      {markingReturned
-                        ? "Тэмдэглэж байна…"
-                        : "Буцаалтыг хүлээн авч буцаасан"}
-                    </button>
-
-                    {/* Буцаалтыг ХҮЛЭЭН АВАХГҮЙ */}
-                    <button
-                      onClick={markDeliveredRejectReturn}
-                      disabled={markingDelivered}
-                      className="text-[11px] px-4 py-2 rounded-full border border-rose-300 bg-rose-50 text-rose-700 hover:bg-rose-100 disabled:opacity-60"
-                    >
-                      {markingDelivered
-                        ? "Тэмдэглэж байна…"
-                        : "Буцаалтыг хүлээн авахгүй"}
-                    </button>
-                  </div>
+                  <button
+                    onClick={handleMarkDelivered}
+                    disabled={markingDelivered}
+                    className="text-[11px] px-4 py-2 rounded-full bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-60"
+                  >
+                    {markingDelivered ? "Тэмдэглэж байна…" : "Хүргэлт хийсэн"}
+                  </button>
                 </div>
               )}
 
@@ -944,16 +803,14 @@ export default function DriverDeliveryDetailPage() {
                   Та энэ хүргэлтийг{" "}
                   <span className="font-semibold">хүргэсэн</span> гэж
                   тэмдэглэсэн. Худалдагч төлбөрөө шилжүүлсэн гэж тэмдэглэсний
-                  дараа “Төлбөрөө авсан” гэж батална.
+                  дараа “Төлбөрөө авсан” гэж баталж, хүргэлт хаагдана.
                 </p>
               )}
             </div>
           )}
 
           {/* 3.3 – Төлбөрийн хэсэг */}
-          {(isDelivered ||
-            delivery.status === "CLOSED" ||
-            delivery.status === "RETURNED") && (
+          {(isDelivered || delivery.status === "CLOSED") && (
             <div className="border-b border-slate-100 pb-3 mb-2 space-y-2">
               <p className="text-xs text-slate-600">
                 Худалдагч төлбөр төлснөө тэмдэглэсэн эсэх, та төлбөрөө бүрэн
@@ -1019,8 +876,8 @@ export default function DriverDeliveryDetailPage() {
                 <span className="font-semibold text-rose-700">
                   ноцтой зөрчил
                 </span>{" "}
-                гарсан (худалдагч төлбөр өгөхөөс татгалзсан, барааны асуудал
-                гэх мэт) бол маргаан нээж болно. Маргаан нээхдээ болсон
+                гарсан (худалдагч төлбөр өгөхөөс татгалзсан, тогтсон
+                тохиролцоог зөрчсөн гэх мэт) бол маргаан нээж болно. Болсон
                 үйлдлийг тодорхой бичнэ үү.
               </p>
               <button
@@ -1052,7 +909,7 @@ export default function DriverDeliveryDetailPage() {
               </h3>
               <p className="text-xs text-slate-600">
                 Худалдагчтай ноцтой асуудал гарсан (төлбөр өгөхөөс татгалзсан,
-                буруу бараа авчирсан гэх мэт) үед л маргаан нээнэ. Болсон
+                тохирсон нөхцөлийг зөрчсөн гэх мэт) үед л маргаан нээнэ. Болсон
                 нөхцөл байдлыг товч, тодорхой бичнэ үү.
               </p>
               <textarea

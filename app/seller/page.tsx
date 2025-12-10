@@ -2,20 +2,15 @@
 
 /* ===========================
  * BLOCK 1 — IMPORT & EXTERNAL LOGIC
- * - Гаднаас авдаг library, тархи (deliveryLogic)
  * =========================== */
 
 import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
-import {
-  DeliveryStatus,
-  SELLER_TABS,
-} from "@/lib/deliveryLogic";
+import { DeliveryStatus, SELLER_TABS } from "@/lib/deliveryLogic";
 
 /* ===========================
  * BLOCK 2 — ТӨРЛҮҮД (TYPES)
- * - Role, IncomeUser, DeliveryRow, SellerTabId, TAB_IDS
  * =========================== */
 
 type Role = "seller" | "driver";
@@ -52,10 +47,11 @@ const TAB_IDS: SellerTabId[] = SELLER_TABS.map((t) => t.id);
 
 /* ===========================
  * BLOCK 3 — ЖИЖИГ ТУСЛАХ ФУНКЦУУД
- * - typeLabel, statusBadge, shorten, formatPrice, formatDateTime
  * =========================== */
 
-function typeLabel(deliveryType: string | null): { icon: string; label: string } {
+function typeLabel(
+  deliveryType: string | null
+): { icon: string; label: string } {
   switch (deliveryType) {
     case "apartment":
       return { icon: "🏙", label: "Байр" };
@@ -82,7 +78,7 @@ function statusBadge(status: DeliveryStatus) {
         text: "Жолооч сонгосон",
         className: "bg-sky-50 text-sky-700 border-sky-100",
       };
-    case "PICKED_UP":
+    case "ON_ROUTE":
       return {
         text: "Замд",
         className: "bg-indigo-50 text-indigo-700 border-indigo-100",
@@ -92,10 +88,10 @@ function statusBadge(status: DeliveryStatus) {
         text: "Хүргэсэн",
         className: "bg-slate-900 text-white border-slate-900",
       };
-    case "RETURNED":
+    case "PAID":
       return {
-        text: "Буцаалт",
-        className: "bg-amber-50 text-amber-800 border-amber-100",
+        text: "Төлбөр тэмдэглэсэн",
+        className: "bg-emerald-50 text-emerald-700 border-emerald-100",
       };
     case "DISPUTE":
       return {
@@ -144,7 +140,6 @@ function formatDateTime(iso: string) {
 
 /* ===========================
  * BLOCK 4 — FILTER ЛОГИК (ТАБ БҮРТЭЙ ХОЛБОГДОХ)
- * - filterByTab: нэг газар төвлөрүүлсэн дүрэм
  * =========================== */
 
 function filterByTab(tab: SellerTabId, items: DeliveryRow[]): DeliveryRow[] {
@@ -152,26 +147,28 @@ function filterByTab(tab: SellerTabId, items: DeliveryRow[]): DeliveryRow[] {
     switch (tab) {
       case "OPEN":
         return d.status === "OPEN";
+
       case "ASSIGNED":
         return d.status === "ASSIGNED";
-      case "PICKED_UP":
-        return d.status === "PICKED_UP"; // DISPUTE-г эндээс салгасан
+
+      case "ON_ROUTE":
+        return d.status === "ON_ROUTE";
+
       case "DELIVERED":
-        // хүргэсэн боловч төлбөр тэмдэглээгүй
+        // Жолооч хүргэсэн гэж дарсан, худалдагч төлбөрөө хараахан тэмдэглээгүй
         return d.status === "DELIVERED" && !d.seller_marked_paid;
-      case "RETURNED":
-        return d.status === "RETURNED";
+
       case "PAID":
-        // худалдагч төлсөн, жолооч хараахан батлаагүй (DELIVERED төлөв)
-        return (
-          d.status === "DELIVERED" &&
-          !!d.seller_marked_paid &&
-          !d.driver_confirmed_payment
-        );
-      case "CLOSED":
-        return d.status === "CLOSED";
+        // Худалдагч төлбөрөө тэмдэглэсэн, системийн статус PAID,
+        // жолооч баталбал CLOSED рүү орно.
+        return d.status === "PAID" && !d.driver_confirmed_payment;
+
       case "DISPUTE":
         return d.status === "DISPUTE";
+
+      case "CLOSED":
+        return d.status === "CLOSED";
+
       default:
         return true;
     }
@@ -179,18 +176,13 @@ function filterByTab(tab: SellerTabId, items: DeliveryRow[]): DeliveryRow[] {
 }
 
 /* ===========================
- * BLOCK 5 — ГОЛ КОМПОНЕНТ (SellerDashboardPage)
- * - Login guard
- * - Tab state
- * - Data fetch
- * - UI render
+ * BLOCK 5 — ГОЛ КОМПОНЕНТ
  * =========================== */
 
 export default function SellerDashboardPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
-  // --- state-ууд ---
   const [user, setUser] = useState<IncomeUser | null>(null);
   const [loadingUser, setLoadingUser] = useState(true);
 
@@ -202,7 +194,7 @@ export default function SellerDashboardPage() {
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  /* ---------- SUB-BLOCK 5.1 — LOGIN GUARD ---------- */
+  /* ---------- LOGIN GUARD ---------- */
 
   useEffect(() => {
     try {
@@ -225,7 +217,7 @@ export default function SellerDashboardPage() {
     }
   }, [router]);
 
-  /* ---------- SUB-BLOCK 5.2 — ТАБЫН ЭХНИЙ УТГА (URL + localStorage) ---------- */
+  /* ---------- ТАБЫН ЭХНИЙ УТГА (URL + localStorage) ---------- */
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -251,7 +243,7 @@ export default function SellerDashboardPage() {
     router.push(`/seller?tab=${tab}`);
   }
 
-  /* ---------- SUB-BLOCK 5.3 — ХҮРГЭЛТИЙН ЖАГСААЛТ ТАТАХ ---------- */
+  /* ---------- ХҮРГЭЛТИЙН ЖАГСААЛТ ТАТАХ ---------- */
 
   useEffect(() => {
     if (!user) return;
@@ -313,7 +305,7 @@ export default function SellerDashboardPage() {
     }
   }
 
-  /* ---------- SUB-BLOCK 5.4 — ЖАГСААЛТЫН UI helper ---------- */
+  /* ---------- ЖАГСААЛТЫН UI helper ---------- */
 
   function renderList(items: DeliveryRow[]) {
     if (items.length === 0) {
@@ -332,13 +324,15 @@ export default function SellerDashboardPage() {
 
           let paymentText = "";
           if (d.status === "DELIVERED") {
-            if (d.seller_marked_paid && !d.driver_confirmed_payment) {
-              paymentText = "Худалдагч төлсөн, жолооч батлаагүй";
-            } else if (!d.seller_marked_paid) {
-              paymentText = "Төлбөр хүлээгдэж байна";
+            if (d.seller_marked_paid) {
+              paymentText = "Та төлбөрөө тэмдэглэсэн, жолооч баталгаажуулахыг хүлээж байна.";
+            } else {
+              paymentText = "Хүргэлт дууссан, төлбөрөө тэмдэглээгүй байна.";
             }
+          } else if (d.status === "PAID") {
+            paymentText = "Төлбөр төлсөн (PAID), жолооч баталгаажуулаагүй байна.";
           } else if (d.status === "CLOSED") {
-            paymentText = "Төлбөр бүрэн тооцоо хийсэн";
+            paymentText = "Төлбөрийн тооцоо бүрэн дууссан (хаагдсан).";
           }
 
           return (
@@ -352,6 +346,7 @@ export default function SellerDashboardPage() {
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="flex-1 space-y-1">
+                  {/* Дээд мөр — ID + статус */}
                   <div className="flex items-center gap-2">
                     <span className="text-xs font-semibold text-slate-900">
                       #{d.id.slice(0, 6)}
@@ -366,6 +361,7 @@ export default function SellerDashboardPage() {
                     </span>
                   </div>
 
+                  {/* Төрөл, үнэ */}
                   <div className="flex items-center gap-2 text-[11px] text-slate-600">
                     <span>{t.icon}</span>
                     <span className="font-medium">{t.label}</span>
@@ -373,6 +369,7 @@ export default function SellerDashboardPage() {
                     <span>{formatPrice(d.price_mnt)}</span>
                   </div>
 
+                  {/* Хаягууд */}
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px] text-slate-600 mt-1">
                     <div>
                       <div className="text-[10px] font-semibold text-slate-500">
@@ -388,16 +385,19 @@ export default function SellerDashboardPage() {
                     </div>
                   </div>
 
+                  {/* Товч тайлбар */}
                   {d.note && (
                     <p className="mt-1 text-[11px] text-slate-500">
                       {shorten(d.note, 80)}
                     </p>
                   )}
 
+                  {/* Огноо */}
                   <p className="mt-1 text-[10px] text-slate-400">
                     Үүсгэсэн: {formatDateTime(d.created_at)}
                   </p>
 
+                  {/* Төлбөрийн тайлбар */}
                   {paymentText && (
                     <p className="mt-1 text-[10px] text-emerald-700">
                       {paymentText}
@@ -412,7 +412,16 @@ export default function SellerDashboardPage() {
     );
   }
 
-  /* ---------- SUB-BLOCK 5.5 — АЧААЛАЛ / АЛДАА / ЭЦСИЙН RENDER ---------- */
+  /* ---------- LOGOUT ---------- */
+
+  function handleLogout() {
+    if (typeof window !== "undefined") {
+      window.localStorage.removeItem("incomeUser");
+    }
+    router.push("/");
+  }
+
+  /* ---------- АЧААЛАЛ / АЛДАА / ЭЦСИЙН RENDER ---------- */
 
   if (loadingUser || loadingList) {
     return (
@@ -432,7 +441,6 @@ export default function SellerDashboardPage() {
 
   const filtered = filterByTab(activeTab, deliveries);
 
-  // таб бүрийн тоо
   const tabCounts: Record<SellerTabId, number> = SELLER_TABS.reduce(
     (acc, t) => {
       acc[t.id] = filterByTab(t.id, deliveries).length;
@@ -454,7 +462,7 @@ export default function SellerDashboardPage() {
 
           <div className="flex items-center gap-2">
             <button
-              onClick={() => router.push("/")}
+              onClick={handleLogout}
               className="text-[11px] px-3 py-1.5 rounded-full border border-slate-200 text-slate-600 hover:bg-slate-50"
             >
               Гарах

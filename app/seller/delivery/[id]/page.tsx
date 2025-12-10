@@ -14,7 +14,6 @@ import {
 
 /* ===========================
  * BLOCK 2 — TYPES
- * - Role, IncomeUser, DeliveryDetail, DriverSummary, DriverBidRow
  * =========================== */
 
 type Role = "seller" | "driver";
@@ -53,7 +52,6 @@ type DriverSummary = {
   phone: string | null;
   rating?: number | null;
   total_deliveries?: number | null;
-  // Дараа нь энд машины дугаар, регистр гэх мэтийг нэмнэ
 };
 
 type DriverBidRow = {
@@ -65,7 +63,6 @@ type DriverBidRow = {
 
 /* ===========================
  * BLOCK 3 — HELPER FUNCTIONS
- * - typeLabel, statusBadge, shorten, formatPrice, formatDateTime, driverRatingText
  * =========================== */
 
 function typeLabel(
@@ -97,7 +94,7 @@ function statusBadge(status: DeliveryStatus) {
         text: "Жолооч сонгосон",
         className: "bg-sky-50 text-sky-700 border-sky-100",
       };
-    case "PICKED_UP":
+    case "ON_ROUTE":
       return {
         text: "Замд гарсан",
         className: "bg-indigo-50 text-indigo-700 border-indigo-100",
@@ -106,6 +103,11 @@ function statusBadge(status: DeliveryStatus) {
       return {
         text: "Хүргэсэн",
         className: "bg-slate-900 text-white border-slate-900",
+      };
+    case "PAID":
+      return {
+        text: "Төлбөр тэмдэглэсэн",
+        className: "bg-emerald-50 text-emerald-700 border-emerald-100",
       };
     case "CLOSED":
       return {
@@ -121,11 +123,6 @@ function statusBadge(status: DeliveryStatus) {
       return {
         text: "Маргаан",
         className: "bg-rose-50 text-rose-700 border-rose-100",
-      };
-    case "RETURNED":
-      return {
-        text: "Буцаасан",
-        className: "bg-amber-50 text-amber-800 border-amber-100",
       };
     default:
       return {
@@ -420,7 +417,7 @@ export default function SellerDeliveryDetailPage() {
   }
 
   /* ===========================
-   * BLOCK 9 — ASSIGNED → PICKED_UP
+   * BLOCK 9 — ASSIGNED → ON_ROUTE
    * =========================== */
 
   async function handleMarkPickedUp() {
@@ -438,7 +435,7 @@ export default function SellerDeliveryDetailPage() {
     try {
       const { error } = await supabase
         .from("deliveries")
-        .update({ status: "PICKED_UP" })
+        .update({ status: "ON_ROUTE" })
         .eq("id", delivery.id)
         .eq("seller_id", user.id);
 
@@ -448,7 +445,7 @@ export default function SellerDeliveryDetailPage() {
         return;
       }
 
-      setDelivery({ ...delivery, status: "PICKED_UP" });
+      setDelivery({ ...delivery, status: "ON_ROUTE" });
       setMessage("Хүргэлтэд гарсан гэж тэмдэглэлээ.");
     } finally {
       setMarkingPickedUp(false);
@@ -459,7 +456,7 @@ export default function SellerDeliveryDetailPage() {
    * BLOCK 10 — DISPUTE OPEN (Маргаан нээх)
    * =========================== */
 
-  const canOpenDispute =
+  const canOpenDisputeFlag =
     !!delivery &&
     !!delivery.chosen_driver_id &&
     canOpenDisputeForSeller(delivery.status);
@@ -603,8 +600,14 @@ export default function SellerDeliveryDetailPage() {
   async function handleCloseDelivery() {
     if (!delivery || !user) return;
 
-    if (delivery.status !== "DELIVERED") {
-      setMessage("Энэ хүргэлт одоогоор хүргээгүй байдалтай байна.");
+    if (
+      !(
+        delivery.status === "DELIVERED" ||
+        delivery.status === "PAID" ||
+        delivery.status === "CLOSED"
+      )
+    ) {
+      setMessage("Энэ хүргэлт одоогоор бүрэн дуусаагүй байна.");
       return;
     }
 
@@ -652,8 +655,20 @@ export default function SellerDeliveryDetailPage() {
   async function handleSellerPaid() {
     if (!delivery || !user) return;
 
-    if (delivery.status !== "DELIVERED") {
+    if (
+      !(
+        delivery.status === "DELIVERED" ||
+        delivery.status === "PAID" ||
+        delivery.status === "CLOSED"
+      )
+    ) {
       setError("Зөвхөн хүргэсэн хүргэлт дээр төлбөр тэмдэглэнэ.");
+      return;
+    }
+
+    // Хаагдсан хүргэлт дээр буцааж засахыг хориглоё
+    if (delivery.status === "CLOSED") {
+      setError("Хаагдсан хүргэлтийн төлбөрийн мэдээллийг засах боломжгүй.");
       return;
     }
 
@@ -664,17 +679,29 @@ export default function SellerDeliveryDetailPage() {
     try {
       const newSellerMarked = !delivery.seller_marked_paid;
 
-      const willBeClosed =
-        newSellerMarked && delivery.driver_confirmed_payment;
+      let newStatus: DeliveryStatus = delivery.status;
+      let newClosedAt: string | null = delivery.closed_at;
+
+      if (newSellerMarked) {
+        // Төлбөрөө шилжүүллээ
+        if (delivery.driver_confirmed_payment) {
+          newStatus = "CLOSED";
+          newClosedAt = new Date().toISOString();
+        } else {
+          newStatus = "PAID";
+        }
+      } else {
+        // Төлбөрөө шилжүүлсэн тэмдэглэгээг буцааж байна
+        newStatus = "DELIVERED";
+        // closed_at-г өөрчлөхгүй (heregtei bol null болгож болно)
+      }
 
       const { error } = await supabase
         .from("deliveries")
         .update({
           seller_marked_paid: newSellerMarked,
-          status: willBeClosed ? "CLOSED" : delivery.status,
-          closed_at: willBeClosed
-            ? new Date().toISOString()
-            : delivery.closed_at,
+          status: newStatus,
+          closed_at: newClosedAt,
         })
         .eq("id", delivery.id)
         .eq("seller_id", user.id);
@@ -688,17 +715,19 @@ export default function SellerDeliveryDetailPage() {
       setDelivery({
         ...delivery,
         seller_marked_paid: newSellerMarked,
-        status: willBeClosed ? "CLOSED" : delivery.status,
-        closed_at: willBeClosed
-          ? new Date().toISOString()
-          : delivery.closed_at,
+        status: newStatus,
+        closed_at: newClosedAt,
       });
 
-      setMessage(
-        newSellerMarked
-          ? "Жолоочид төлбөр шилжүүлснээ тэмдэглэлээ."
-          : "Жолоочид төлбөр шилжүүлээгүй гэж заслаа."
-      );
+      if (newSellerMarked) {
+        setMessage(
+          newStatus === "CLOSED"
+            ? "Жолоочид төлбөр шилжүүлснээ тэмдэглэлээ. Жолооч мөнгөө баталсан тул энэ хүргэлт хаагдлаа."
+            : "Жолоочид төлбөр шилжүүлснээ тэмдэглэлээ."
+        );
+      } else {
+        setMessage("Жолоочид төлбөр шилжүүлээгүй гэж заслаа.");
+      }
     } finally {
       setPayLoading(false);
     }
@@ -731,7 +760,7 @@ export default function SellerDeliveryDetailPage() {
   }
 
   /* ===========================
-   * BLOCK 15 — LOADING / ERROR / BASIC FLAGS
+   * BLOCK 15 — LOADING / BASIC FLAGS
    * =========================== */
 
   if (loadingUser || loadingDetail) {
@@ -762,7 +791,7 @@ export default function SellerDeliveryDetailPage() {
   const hasChosenDriver = !!delivery.chosen_driver_id && !!chosenBid;
   const isOpen = delivery.status === "OPEN";
   const isAssigned = delivery.status === "ASSIGNED";
-  const isPickedUp = delivery.status === "PICKED_UP";
+  const isOnRoute = delivery.status === "ON_ROUTE";
   const isDelivered = delivery.status === "DELIVERED";
 
   const sellerPaid = !!delivery.seller_marked_paid;
@@ -842,13 +871,6 @@ export default function SellerDeliveryDetailPage() {
           <div className="rounded-2xl border border-rose-100 bg-rose-50 px-4 py-3 text-xs text-rose-800">
             Энэ хүргэлт дээр <span className="font-semibold">маргаан</span>{" "}
             нээгдсэн. Тухайн жолоочийн аккаунт түр хаагдсан байгаа.
-          </div>
-        )}
-
-        {delivery.status === "RETURNED" && (
-          <div className="rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3 text-xs text-amber-800">
-            Энэ хүргэлт <span className="font-semibold">буцаасан</span> төлөвт
-            байна.
           </div>
         )}
 
@@ -934,7 +956,7 @@ export default function SellerDeliveryDetailPage() {
                     {chosenBid?.driver?.name || "Жолооч"}
                   </span>
                   <span className="text-[10px] rounded-full bg-emerald-600 text-white px-2 py-0.5">
-                    {isPickedUp || isDelivered
+                    {isOnRoute || isDelivered
                       ? "Энэ хүргэлтийг хийж буй жолооч"
                       : "Сонгосон жолооч"}
                   </span>
@@ -1056,10 +1078,10 @@ export default function SellerDeliveryDetailPage() {
           )}
 
           {/* Маргаан үүсгэх */}
-          {canOpenDispute && (
+          {canOpenDisputeFlag && (
             <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-3 mt-2">
               <p className="text-xs text-slate-600">
-                Жолооч барааг авчихаад удаан хугацаанд холбоо барихгүй, хүргэлт
+                Жолооч барааг аваад удаан хугацаанд холбоо барихгүй, хүргэлт
                 гүйцэтгээгүй тохиолдолд{" "}
                 <span className="font-semibold text-rose-700">
                   маргаан нээж
@@ -1076,8 +1098,8 @@ export default function SellerDeliveryDetailPage() {
             </div>
           )}
 
-          {/* Төлбөр тэмдэглэх (DELIVERED) */}
-          {delivery.status === "DELIVERED" && (
+          {/* Төлбөр тэмдэглэх (DELIVERED/PAID) */}
+          {(delivery.status === "DELIVERED" || delivery.status === "PAID") && (
             <div className="border-t border-slate-100 pt-3 mt-2 space-y-2">
               {!sellerPaid ? (
                 <>
@@ -1107,34 +1129,37 @@ export default function SellerDeliveryDetailPage() {
           )}
 
           {/* Үнэлгээ */}
-          {delivery.status === "DELIVERED" && delivery.chosen_driver_id && (
-            <div className="border-t border-slate-100 pt-3 mt-2 space-y-3">
-              <p className="text-xs text-slate-600">
-                Хүргэлт амжилттай дууссан бол жолоочид од өгч үнэлнэ үү.
-              </p>
+          {(delivery.status === "DELIVERED" ||
+            delivery.status === "PAID" ||
+            delivery.status === "CLOSED") &&
+            delivery.chosen_driver_id && (
+              <div className="border-t border-slate-100 pt-3 mt-2 space-y-3">
+                <p className="text-xs text-slate-600">
+                  Хүргэлт амжилттай дууссан бол жолоочид од өгч үнэлнэ үү.
+                </p>
 
-              <div className="flex flex-col gap-2">
-                {renderStars()}
-                <textarea
-                  value={ratingComment}
-                  onChange={(e) => setRatingComment(e.target.value)}
-                  rows={3}
-                  className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
-                  placeholder="Сэтгэгдэл (заавал биш)…"
-                />
-              </div>
+                <div className="flex flex-col gap-2">
+                  {renderStars()}
+                  <textarea
+                    value={ratingComment}
+                    onChange={(e) => setRatingComment(e.target.value)}
+                    rows={3}
+                    className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
+                    placeholder="Сэтгэгдэл (заавал биш)…"
+                  />
+                </div>
 
-              <div className="flex justify-end">
-                <button
-                  onClick={handleCloseDelivery}
-                  disabled={closing}
-                  className="text-[11px] px-4 py-2 rounded-full bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-60"
-                >
-                  {closing ? "Илгээж байна…" : "Үнэлгээ илгээх"}
-                </button>
+                <div className="flex justify-end">
+                  <button
+                    onClick={handleCloseDelivery}
+                    disabled={closing}
+                    className="text-[11px] px-4 py-2 rounded-full bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-60"
+                  >
+                    {closing ? "Илгээж байна…" : "Үнэлгээ илгээх"}
+                  </button>
+                </div>
               </div>
-            </div>
-          )}
+            )}
 
           {/* Төлбөрийн суммари */}
           <div className="border-t border-slate-100 pt-3 mt-2 space-y-1">
