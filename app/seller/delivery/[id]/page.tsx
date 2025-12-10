@@ -1,10 +1,21 @@
 "use client";
 
-// =================== 1. Импорт, төрлүүд ===================
+/* ===========================
+ * BLOCK 1 — IMPORT & EXTERNAL LOGIC
+ * =========================== */
 
 import { useEffect, useState } from "react";
 import { useRouter, useParams, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import {
+  DeliveryStatus,
+  canOpenDisputeForSeller,
+} from "@/lib/deliveryLogic";
+
+/* ===========================
+ * BLOCK 2 — TYPES
+ * - Role, IncomeUser, DeliveryDetail, DriverSummary, DriverBidRow
+ * =========================== */
 
 type Role = "seller" | "driver";
 
@@ -15,16 +26,6 @@ type IncomeUser = {
   phone: string;
   email: string;
 };
-
-type DeliveryStatus =
-  | "OPEN"
-  | "ASSIGNED"
-  | "PICKED_UP"
-  | "DELIVERED"
-  | "CLOSED" // бүрэн хаагдсан
-  | "CANCELLED"
-  | "DISPUTE"
-  | "RETURNED";
 
 type DeliveryDetail = {
   id: string;
@@ -52,7 +53,7 @@ type DriverSummary = {
   phone: string | null;
   rating?: number | null;
   total_deliveries?: number | null;
-  // Дараа нь энд машины дугаар, регистр, гэрийн хаяг, ID зураг гэх мэтийг нэмнэ
+  // Дараа нь энд машины дугаар, регистр гэх мэтийг нэмнэ
 };
 
 type DriverBidRow = {
@@ -62,7 +63,10 @@ type DriverBidRow = {
   driver: DriverSummary | null;
 };
 
-// =================== 2. Туслах функцууд ===================
+/* ===========================
+ * BLOCK 3 — HELPER FUNCTIONS
+ * - typeLabel, statusBadge, shorten, formatPrice, formatDateTime, driverRatingText
+ * =========================== */
 
 function typeLabel(
   deliveryType: string | null
@@ -161,12 +165,16 @@ function driverRatingText(driver: DriverSummary | null) {
   return `${r} ★ • ${total} хүргэлт`;
 }
 
-// =================== 3. Гол компонент ===================
+/* ===========================
+ * BLOCK 4 — MAIN COMPONENT
+ * =========================== */
 
 export default function SellerDeliveryDetailPage() {
   const router = useRouter();
   const params = useParams();
   const searchParams = useSearchParams();
+
+  /* ---------- SUB-BLOCK 4.1 — PARAMS & BACK URL ---------- */
 
   const idParam = (params as any)?.id;
   const deliveryId =
@@ -176,11 +184,11 @@ export default function SellerDeliveryDetailPage() {
       ? idParam[0]
       : "";
 
-  // Аль табаас орж ирснээ URL-ээс уншина (жагсаалт руу буцахад)
   const fromTab = searchParams.get("tab");
   const backUrl = fromTab ? `/seller?tab=${fromTab}` : "/seller";
 
-  // ---- төлөвүүд ----
+  /* ---------- SUB-BLOCK 4.2 — STATE ---------- */
+
   const [user, setUser] = useState<IncomeUser | null>(null);
   const [loadingUser, setLoadingUser] = useState(true);
 
@@ -198,10 +206,9 @@ export default function SellerDeliveryDetailPage() {
   const [showDisputeModal, setShowDisputeModal] = useState(false);
   const [disputeReason, setDisputeReason] = useState("");
   const [openingDispute, setOpeningDispute] = useState(false);
-  const [resolvingDispute, setResolvingDispute] = useState(false);
+  const [resolvingDispute] = useState(false); // одоохондоо ашиглахгүй ч үлдээе
 
-
-  // 🚫 Сонгогдсон жолоочийг цуцлах (seller-д блоклох)
+  // Сонгогдсон жолоочийг цуцлах
   const [showCancelModal, setShowCancelModal] = useState(false);
   const [cancelReasons, setCancelReasons] = useState({
     no_show: false,
@@ -221,7 +228,9 @@ export default function SellerDeliveryDetailPage() {
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // =================== 4. Login guard ===================
+  /* ===========================
+   * BLOCK 5 — LOGIN GUARD
+   * =========================== */
 
   useEffect(() => {
     try {
@@ -244,7 +253,9 @@ export default function SellerDeliveryDetailPage() {
     }
   }, [router]);
 
-  // =================== 5. Хүргэлтийн мэдээлэл татах ===================
+  /* ===========================
+   * BLOCK 6 — FETCH DELIVERY DETAIL
+   * =========================== */
 
   useEffect(() => {
     if (!user || !deliveryId) return;
@@ -353,7 +364,9 @@ export default function SellerDeliveryDetailPage() {
     }
   }
 
-  // =================== 6. Гарах ===================
+  /* ===========================
+   * BLOCK 7 — LOGOUT
+   * =========================== */
 
   function handleLogout() {
     if (typeof window !== "undefined") {
@@ -362,7 +375,9 @@ export default function SellerDeliveryDetailPage() {
     router.push("/");
   }
 
-  // =================== 7. Жолооч сонгох ===================
+  /* ===========================
+   * BLOCK 8 — DRIVER SELECT (OPEN → ASSIGNED)
+   * =========================== */
 
   async function handleSelectDriver(driverId: string) {
     if (!delivery || !user) return;
@@ -404,7 +419,9 @@ export default function SellerDeliveryDetailPage() {
     }
   }
 
-  // =================== 8. Хүргэлтэд гарсан (ASSIGNED → PICKED_UP) ===================
+  /* ===========================
+   * BLOCK 9 — ASSIGNED → PICKED_UP
+   * =========================== */
 
   async function handleMarkPickedUp() {
     if (!delivery || !user) return;
@@ -438,21 +455,16 @@ export default function SellerDeliveryDetailPage() {
     }
   }
 
-    // =================== 9. Маргаан үүсгэх ===================
-  // Жолооч энэ хүргэлт дээр оролцож байгаа бүх эрсдэлтэй төлөв дээр
-  // (ASSIGNED, PICKED_UP, RETURNED, DELIVERED) маргаан нээж болдог.
-  // DISPUTE / CANCELLED / CLOSED бол дахин маргаан нээхгүй.
+  /* ===========================
+   * BLOCK 10 — DISPUTE OPEN (Маргаан нээх)
+   * =========================== */
 
   const canOpenDispute =
     !!delivery &&
     !!delivery.chosen_driver_id &&
-    (delivery.status === "ASSIGNED" ||
-      delivery.status === "PICKED_UP" ||
-      delivery.status === "RETURNED" ||
-      delivery.status === "DELIVERED");
+    canOpenDisputeForSeller(delivery.status);
 
   async function handleOpenDisputeConfirm() {
-    // Ямар ч байсан хүргэлт, хэрэглэгч, сонгогдсон жолооч байх ёстой
     if (!delivery || !user || !delivery.chosen_driver_id) return;
 
     const reason = disputeReason.trim();
@@ -482,14 +494,12 @@ export default function SellerDeliveryDetailPage() {
         return;
       }
 
-      // Локал төлөв шинэчлэх
       setDelivery({
         ...delivery,
         status: "DISPUTE",
         dispute_reason: reason,
       });
 
-      // Modal хаах, талбар reset
       setShowDisputeModal(false);
       setDisputeReason("");
       setMessage("Маргаан амжилттай нээгдлээ.");
@@ -498,7 +508,9 @@ export default function SellerDeliveryDetailPage() {
     }
   }
 
-  // =================== 10. Сонгогдсон жолоочийг ЦУЦЛАХ ===================
+  /* ===========================
+   * BLOCK 11 — CANCEL DRIVER (ASSIGNED → OPEN + блок)
+   * =========================== */
 
   const canCancelDriver =
     !!delivery && delivery.status === "ASSIGNED" && !!delivery.chosen_driver_id;
@@ -530,7 +542,6 @@ export default function SellerDeliveryDetailPage() {
     setMessage(null);
 
     try {
-      // 1) Худалдагч энэ жолоочийг өөртөө блоклох
       const { error: blockError } = await supabase
         .from("seller_blocked_drivers")
         .insert({
@@ -545,7 +556,6 @@ export default function SellerDeliveryDetailPage() {
         return;
       }
 
-      // 2) Хүргэлтийг буцааж OPEN болгоно
       const { error: updError } = await supabase
         .from("deliveries")
         .update({
@@ -561,17 +571,14 @@ export default function SellerDeliveryDetailPage() {
         return;
       }
 
-      // 3) Локал state шинэчлэх
       setDelivery({
         ...delivery,
         status: "OPEN",
         chosen_driver_id: null,
       });
 
-      // Цуцлагдсан жолоочийн bid-ыг энэ хүргэлт дээрээс бүр мөсөн нуух
       setBids((prev) => prev.filter((b) => b.driver_id !== blockedDriverId));
 
-      // UI reset
       setShowCancelModal(false);
       setCancelReasons({
         no_show: false,
@@ -589,7 +596,9 @@ export default function SellerDeliveryDetailPage() {
     }
   }
 
-  // =================== 11. Үнэлгээ өгөөд хаах (одоо зөвхөн үнэлгээ) ===================
+  /* ===========================
+   * BLOCK 12 — RATING & CLOSE
+   * =========================== */
 
   async function handleCloseDelivery() {
     if (!delivery || !user) return;
@@ -629,14 +638,16 @@ export default function SellerDeliveryDetailPage() {
 
       setMessage("Жолоочид үнэлгээ амжилттай өглөө.");
       setTimeout(() => {
-        router.push(backUrl); // яг тухайн таб руу буцна
+        router.push(backUrl);
       }, 800);
     } finally {
       setClosing(false);
     }
   }
 
-  // =================== 12. Худалдагч төлбөр төлснөө тэмдэглэх ===================
+  /* ===========================
+   * BLOCK 13 — SELLER PAID TOGGLE
+   * =========================== */
 
   async function handleSellerPaid() {
     if (!delivery || !user) return;
@@ -693,7 +704,9 @@ export default function SellerDeliveryDetailPage() {
     }
   }
 
-  // =================== 13. Star rating UI ===================
+  /* ===========================
+   * BLOCK 14 — STAR RATING UI
+   * =========================== */
 
   function renderStars() {
     return (
@@ -717,7 +730,9 @@ export default function SellerDeliveryDetailPage() {
     );
   }
 
-  // =================== 14. Ачаалалт / алдаа ===================
+  /* ===========================
+   * BLOCK 15 — LOADING / ERROR / BASIC FLAGS
+   * =========================== */
 
   if (loadingUser || loadingDetail) {
     return (
@@ -758,7 +773,9 @@ export default function SellerDeliveryDetailPage() {
     driverSectionTitle = "Жолоочийн авах хүсэлтүүд";
   }
 
-  // =================== 15. Гол UI ===================
+  /* ===========================
+   * BLOCK 16 — MAIN UI
+   * =========================== */
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -766,7 +783,7 @@ export default function SellerDeliveryDetailPage() {
       <header className="border-b border-slate-200 bg-white">
         <div className="max-w-3xl mx-auto px-4 py-4 flex items-center justify-between gap-3">
           <div className="flex items-center gap-3">
-            {/* Mobile back товч – жижиг дэлгэц дээр */}
+            {/* Mobile back товч */}
             <button
               onClick={() => router.push(backUrl)}
               className="inline-flex sm:hidden items-center justify-center h-8 w-8 rounded-full border border-slate-200 text-slate-600 hover:bg-slate-50"
@@ -891,14 +908,12 @@ export default function SellerDeliveryDetailPage() {
               {driverSectionTitle}
             </h2>
             <div className="flex items-center gap-2">
-              {/* Нийт саналын тоо — зөвхөн OPEN + жолооч сонгоогүй үед */}
               {isOpen && !hasChosenDriver && (
                 <span className="text-[11px] text-slate-500">
                   Нийт: {bids.length}
                 </span>
               )}
 
-              {/* Сонгогдсон жолооч байгаа үед — “Жолоочийн дэлгэрэнгүй” товч */}
               {hasChosenDriver && (
                 <button
                   type="button"
@@ -911,7 +926,6 @@ export default function SellerDeliveryDetailPage() {
             </div>
           </div>
 
-          {/* 1) Сонгогдсон жолооч байгаа бүх үед (ASSIGNED / PICKED_UP / DELIVERED / CLOSED) */}
           {hasChosenDriver ? (
             <div className="rounded-2xl border border-emerald-300 bg-emerald-50/60 px-3 py-3 flex items-center justify-between gap-3">
               <div className="space-y-1 text-xs text-slate-700">
@@ -939,7 +953,6 @@ export default function SellerDeliveryDetailPage() {
               </div>
             </div>
           ) : isOpen ? (
-            /* 2) OPEN үед – саналын жагсаалт */
             bids.length === 0 ? (
               <p className="text-xs text-slate-500">
                 Одоогоор жолооч авах хүсэлт илгээгээгүй байна.
@@ -991,7 +1004,6 @@ export default function SellerDeliveryDetailPage() {
               </div>
             )
           ) : (
-            /* 3) OPEN биш + сонгогдсон жолооч байхгүй edge case */
             <p className="text-xs text-slate-500">
               Одоогоор жолооч сонгогдоогүй байна.
             </p>
@@ -1022,7 +1034,7 @@ export default function SellerDeliveryDetailPage() {
             </div>
           )}
 
-          {/* Жолоочийг ЦУЦЛАХ */}
+          {/* Жолоочийг цуцлах */}
           {canCancelDriver && (
             <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-3 mt-2">
               <p className="text-xs text-slate-600">
@@ -1064,7 +1076,7 @@ export default function SellerDeliveryDetailPage() {
             </div>
           )}
 
-          {/* Төлбөр төлсөн гэж тэмдэглэх (DELIVERED үед) */}
+          {/* Төлбөр тэмдэглэх (DELIVERED) */}
           {delivery.status === "DELIVERED" && (
             <div className="border-t border-slate-100 pt-3 mt-2 space-y-2">
               {!sellerPaid ? (
@@ -1094,7 +1106,7 @@ export default function SellerDeliveryDetailPage() {
             </div>
           )}
 
-          {/* Үнэлгээ (DELIVERED) */}
+          {/* Үнэлгээ */}
           {delivery.status === "DELIVERED" && delivery.chosen_driver_id && (
             <div className="border-t border-slate-100 pt-3 mt-2 space-y-3">
               <p className="text-xs text-slate-600">
@@ -1124,7 +1136,7 @@ export default function SellerDeliveryDetailPage() {
             </div>
           )}
 
-          {/* Төлбөрийн суммари – бүх төлөв дээр харуулна */}
+          {/* Төлбөрийн суммари */}
           <div className="border-t border-slate-100 pt-3 mt-2 space-y-1">
             <p className="text-[11px] text-slate-500">
               Худалдагч:{" "}
@@ -1157,7 +1169,6 @@ export default function SellerDeliveryDetailPage() {
             )}
           </div>
 
-          {/* CLOSED үед богино тайлбар */}
           {delivery.status === "CLOSED" && (
             <div className="border-t border-slate-100 pt-3 mt-2">
               <p className="text-xs text-slate-600">
@@ -1172,7 +1183,7 @@ export default function SellerDeliveryDetailPage() {
         {/* Жолоочийн дэлгэрэнгүй modal */}
         {showDriverInfoModal && hasChosenDriver && chosenBid && (
           <div className="fixed inset-0 z-20 flex items-center justify-center bg-black/30 px-4">
-            <div className="max-w-md w_full rounded-2xl bg-white shadow-lg border border-slate-200 px-4 py-4 space-y-3">
+            <div className="max-w-md w-full rounded-2xl bg-white shadow-lg border border-slate-200 px-4 py-4 space-y-3">
               <h3 className="text-sm font-semibold text-slate-900">
                 Жолоочийн мэдээлэл
               </h3>

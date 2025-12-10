@@ -1,8 +1,22 @@
 "use client";
 
+/* ===========================
+ * BLOCK 1 — IMPORT & EXTERNAL LOGIC
+ * - Гаднаас авдаг library, тархи (deliveryLogic)
+ * =========================== */
+
 import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import {
+  DeliveryStatus,
+  SELLER_TABS,
+} from "@/lib/deliveryLogic";
+
+/* ===========================
+ * BLOCK 2 — ТӨРЛҮҮД (TYPES)
+ * - Role, IncomeUser, DeliveryRow, SellerTabId, TAB_IDS
+ * =========================== */
 
 type Role = "seller" | "driver";
 
@@ -13,16 +27,6 @@ type IncomeUser = {
   phone: string;
   email: string;
 };
-
-type DeliveryStatus =
-  | "OPEN"
-  | "ASSIGNED"
-  | "PICKED_UP"
-  | "DELIVERED"
-  | "RETURNED"
-  | "DISPUTE"
-  | "CANCELLED"
-  | "CLOSED";
 
 type DeliveryRow = {
   id: string;
@@ -40,30 +44,16 @@ type DeliveryRow = {
   closed_at: string | null;
 };
 
-type SellerTabId =
-  | "OPEN"
-  | "ASSIGNED"
-  | "PICKED_UP"
-  | "DELIVERED"
-  | "RETURNED"
-  | "PAID"
-  | "CLOSED"
-  | "DISPUTE";
+// SELLER_TABS-ийг deliveryLogic доторх тодорхойлолтоос нь шууд ашиглаж байна
+type SellerTabId = (typeof SELLER_TABS)[number]["id"];
 
-const SELLER_TABS: { id: SellerTabId; label: string }[] = [
-  { id: "OPEN",      label: "Нээлттэй" },
-  { id: "ASSIGNED",  label: "Сонгосон" },
-  { id: "PICKED_UP", label: "Замд" },
-  { id: "DELIVERED", label: "Хүргэсэн" },
-  { id: "PAID",      label: "Төлбөр төлсөн" },
-  { id: "CLOSED",    label: "Хаагдсан" },
-  { id: "RETURNED",  label: "Буцаалт" },
-  { id: "DISPUTE",   label: "Маргаан" }, // ✔ хамгийн сүүлд
-];
-
+// URL / localStorage-д хадгалахдаа ашиглах табуудын ID жагсаалт
 const TAB_IDS: SellerTabId[] = SELLER_TABS.map((t) => t.id);
 
-// -------- туслах функцууд --------
+/* ===========================
+ * BLOCK 3 — ЖИЖИГ ТУСЛАХ ФУНКЦУУД
+ * - typeLabel, statusBadge, shorten, formatPrice, formatDateTime
+ * =========================== */
 
 function typeLabel(deliveryType: string | null): { icon: string; label: string } {
   switch (deliveryType) {
@@ -152,7 +142,10 @@ function formatDateTime(iso: string) {
   );
 }
 
-// -------- табын дагуу filter --------
+/* ===========================
+ * BLOCK 4 — FILTER ЛОГИК (ТАБ БҮРТЭЙ ХОЛБОГДОХ)
+ * - filterByTab: нэг газар төвлөрүүлсэн дүрэм
+ * =========================== */
 
 function filterByTab(tab: SellerTabId, items: DeliveryRow[]): DeliveryRow[] {
   return items.filter((d) => {
@@ -185,12 +178,19 @@ function filterByTab(tab: SellerTabId, items: DeliveryRow[]): DeliveryRow[] {
   });
 }
 
-// ================== ГОЛ КОМПОНЕНТ ==================
+/* ===========================
+ * BLOCK 5 — ГОЛ КОМПОНЕНТ (SellerDashboardPage)
+ * - Login guard
+ * - Tab state
+ * - Data fetch
+ * - UI render
+ * =========================== */
 
 export default function SellerDashboardPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
+  // --- state-ууд ---
   const [user, setUser] = useState<IncomeUser | null>(null);
   const [loadingUser, setLoadingUser] = useState(true);
 
@@ -202,7 +202,8 @@ export default function SellerDashboardPage() {
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // ---- Login guard ----
+  /* ---------- SUB-BLOCK 5.1 — LOGIN GUARD ---------- */
+
   useEffect(() => {
     try {
       const raw = window.localStorage.getItem("incomeUser");
@@ -224,7 +225,8 @@ export default function SellerDashboardPage() {
     }
   }, [router]);
 
-  // ---- Табын эхний утга (URL эсвэл localStorage-оос) ----
+  /* ---------- SUB-BLOCK 5.2 — ТАБЫН ЭХНИЙ УТГА (URL + localStorage) ---------- */
+
   useEffect(() => {
     if (typeof window === "undefined") return;
 
@@ -249,7 +251,8 @@ export default function SellerDashboardPage() {
     router.push(`/seller?tab=${tab}`);
   }
 
-  // ---- Хүргэлтийн жагсаалт татах ----
+  /* ---------- SUB-BLOCK 5.3 — ХҮРГЭЛТИЙН ЖАГСААЛТ ТАТАХ ---------- */
+
   useEffect(() => {
     if (!user) return;
     void fetchDeliveries(user.id);
@@ -310,7 +313,8 @@ export default function SellerDashboardPage() {
     }
   }
 
-  // ---- UI helper ----
+  /* ---------- SUB-BLOCK 5.4 — ЖАГСААЛТЫН UI helper ---------- */
+
   function renderList(items: DeliveryRow[]) {
     if (items.length === 0) {
       return (
@@ -408,7 +412,8 @@ export default function SellerDashboardPage() {
     );
   }
 
-  // ---- ачаалалт / алдаа ----
+  /* ---------- SUB-BLOCK 5.5 — АЧААЛАЛ / АЛДАА / ЭЦСИЙН RENDER ---------- */
+
   if (loadingUser || loadingList) {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center">
