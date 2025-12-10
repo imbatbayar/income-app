@@ -3,7 +3,7 @@
 // =================== 1. Импорт, төрлүүд ===================
 
 import { useEffect, useState } from "react";
-import { useRouter, useParams } from "next/navigation";
+import { useRouter, useParams, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 
 type Role = "seller" | "driver";
@@ -166,6 +166,8 @@ function driverRatingText(driver: DriverSummary | null) {
 export default function SellerDeliveryDetailPage() {
   const router = useRouter();
   const params = useParams();
+  const searchParams = useSearchParams();
+
   const idParam = (params as any)?.id;
   const deliveryId =
     typeof idParam === "string"
@@ -173,6 +175,10 @@ export default function SellerDeliveryDetailPage() {
       : Array.isArray(idParam)
       ? idParam[0]
       : "";
+
+  // Аль табаас орж ирснээ URL-ээс уншина (жагсаалт руу буцахад)
+  const fromTab = searchParams.get("tab");
+  const backUrl = fromTab ? `/seller?tab=${fromTab}` : "/seller";
 
   // ---- төлөвүүд ----
   const [user, setUser] = useState<IncomeUser | null>(null);
@@ -345,7 +351,16 @@ export default function SellerDeliveryDetailPage() {
     }
   }
 
-  // =================== 6. Жолооч сонгох ===================
+  // =================== 6. Гарах ===================
+
+  function handleLogout() {
+    if (typeof window !== "undefined") {
+      window.localStorage.removeItem("incomeUser");
+    }
+    router.push("/");
+  }
+
+  // =================== 7. Жолооч сонгох ===================
 
   async function handleSelectDriver(driverId: string) {
     if (!delivery || !user) return;
@@ -387,7 +402,7 @@ export default function SellerDeliveryDetailPage() {
     }
   }
 
-  // =================== 7. Хүргэлтэд гарсан (ASSIGNED → PICKED_UP) ===================
+  // =================== 8. Хүргэлтэд гарсан (ASSIGNED → PICKED_UP) ===================
 
   async function handleMarkPickedUp() {
     if (!delivery || !user) return;
@@ -421,12 +436,21 @@ export default function SellerDeliveryDetailPage() {
     }
   }
 
-  // =================== 8. Маргаан үүсгэх ===================
+    // =================== 9. Маргаан үүсгэх ===================
+  // Жолооч энэ хүргэлт дээр оролцож байгаа бүх эрсдэлтэй төлөв дээр
+  // (ASSIGNED, PICKED_UP, RETURNED, DELIVERED) маргаан нээж болдог.
+  // DISPUTE / CANCELLED / CLOSED бол дахин маргаан нээхгүй.
 
   const canOpenDispute =
-    !!delivery && delivery.status === "PICKED_UP" && !!delivery.chosen_driver_id;
+    !!delivery &&
+    !!delivery.chosen_driver_id &&
+    (delivery.status === "ASSIGNED" ||
+      delivery.status === "PICKED_UP" ||
+      delivery.status === "RETURNED" ||
+      delivery.status === "DELIVERED");
 
   async function handleOpenDisputeConfirm() {
+    // Ямар ч байсан хүргэлт, хэрэглэгч, сонгогдсон жолооч байх ёстой
     if (!delivery || !user || !delivery.chosen_driver_id) return;
 
     const reason = disputeReason.trim();
@@ -456,11 +480,14 @@ export default function SellerDeliveryDetailPage() {
         return;
       }
 
+      // Локал төлөв шинэчлэх
       setDelivery({
         ...delivery,
         status: "DISPUTE",
         dispute_reason: reason,
       });
+
+      // Modal хаах, талбар reset
       setShowDisputeModal(false);
       setDisputeReason("");
       setMessage("Маргаан амжилттай нээгдлээ.");
@@ -469,7 +496,7 @@ export default function SellerDeliveryDetailPage() {
     }
   }
 
-  // =================== 9. Сонгогдсон жолоочийг ЦУЦЛАХ ===================
+  // =================== 10. Сонгогдсон жолоочийг ЦУЦЛАХ ===================
 
   const canCancelDriver =
     !!delivery && delivery.status === "ASSIGNED" && !!delivery.chosen_driver_id;
@@ -560,7 +587,7 @@ export default function SellerDeliveryDetailPage() {
     }
   }
 
-  // =================== 10. Үнэлгээ өгөөд хаах (одоо зөвхөн үнэлгээ) ===================
+  // =================== 11. Үнэлгээ өгөөд хаах (одоо зөвхөн үнэлгээ) ===================
 
   async function handleCloseDelivery() {
     if (!delivery || !user) return;
@@ -600,14 +627,14 @@ export default function SellerDeliveryDetailPage() {
 
       setMessage("Жолоочид үнэлгээ амжилттай өглөө.");
       setTimeout(() => {
-        router.push("/seller");
+        router.push(backUrl); // яг тухайн таб руу буцна
       }, 800);
     } finally {
       setClosing(false);
     }
   }
 
-  // =================== 11. Худалдагч төлбөр төлснөө тэмдэглэх ===================
+  // =================== 12. Худалдагч төлбөр төлснөө тэмдэглэх ===================
 
   async function handleSellerPaid() {
     if (!delivery || !user) return;
@@ -625,10 +652,7 @@ export default function SellerDeliveryDetailPage() {
       const newSellerMarked = !delivery.seller_marked_paid;
 
       const willBeClosed =
-        newSellerMarked &&
-        delivery.driver_confirmed_payment &&
-        delivery.status !== "CLOSED" &&
-        delivery.status !== "CANCELLED";
+        newSellerMarked && delivery.driver_confirmed_payment;
 
       const { error } = await supabase
         .from("deliveries")
@@ -667,7 +691,7 @@ export default function SellerDeliveryDetailPage() {
     }
   }
 
-  // =================== 12. Star rating UI ===================
+  // =================== 13. Star rating UI ===================
 
   function renderStars() {
     return (
@@ -691,7 +715,7 @@ export default function SellerDeliveryDetailPage() {
     );
   }
 
-  // =================== 13. Ачаалалт / алдаа ===================
+  // =================== 14. Ачаалалт / алдаа ===================
 
   if (loadingUser || loadingDetail) {
     return (
@@ -732,43 +756,61 @@ export default function SellerDeliveryDetailPage() {
     driverSectionTitle = "Жолоочийн авах хүсэлтүүд";
   }
 
-  // =================== 14. Гол UI ===================
+  // =================== 15. Гол UI ===================
 
   return (
     <div className="min-h-screen bg-slate-50">
       {/* Толгой */}
       <header className="border-b border-slate-200 bg-white">
         <div className="max-w-3xl mx-auto px-4 py-4 flex items-center justify-between gap-3">
-          <div>
-            <div className="inline-flex items-center gap-1 rounded-full border border-slate-100 bg-slate-50 px-2 py-0.5">
-              <span className="text-xs text-slate-600">
-                Хүргэлтийн дэлгэрэнгүй
-              </span>
+          <div className="flex items-center gap-3">
+            {/* Mobile back товч – жижиг дэлгэц дээр */}
+            <button
+              onClick={() => router.push(backUrl)}
+              className="inline-flex sm:hidden items-center justify-center h-8 w-8 rounded-full border border-slate-200 text-slate-600 hover:bg-slate-50"
+            >
+              ←
+            </button>
+
+            <div>
+              <div className="inline-flex items-center gap-1 rounded-full border border-slate-100 bg-slate-50 px-2 py-0.5">
+                <span className="text-xs text-slate-600">
+                  Хүргэлтийн дэлгэрэнгүй
+                </span>
+              </div>
+              <div className="mt-1 flex items-center gap-2">
+                <span className="text-sm font-semibold text-slate-900">
+                  #{delivery.id.slice(0, 6)}
+                </span>
+                <span
+                  className={
+                    "inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium " +
+                    sb.className
+                  }
+                >
+                  {sb.text}
+                </span>
+              </div>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Үүсгэсэн: {formatDateTime(delivery.created_at)}
+              </p>
             </div>
-            <div className="mt-1 flex items-center gap-2">
-              <span className="text-sm font-semibold text-slate-900">
-                #{delivery.id.slice(0, 6)}
-              </span>
-              <span
-                className={
-                  "inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium " +
-                  sb.className
-                }
-              >
-                {sb.text}
-              </span>
-            </div>
-            <p className="text-xs text-slate-500 mt-0.5">
-              Үүсгэсэн: {formatDateTime(delivery.created_at)}
-            </p>
           </div>
 
-          <div className="hidden sm:flex items-center gap-2">
+          <div className="flex items-center gap-2">
+            {/* Desktop back товч */}
             <button
-              onClick={() => router.push("/seller")}
-              className="text-[11px] px-3 py-1.5 rounded-full border border-slate-200 text-slate-600 hover:bg-slate-50"
+              onClick={() => router.push(backUrl)}
+              className="hidden sm:inline-flex text-[11px] px-3 py-1.5 rounded-full border border-slate-200 text-slate-600 hover:bg-slate-50"
             >
-              ← Жагсаалт руу буцах
+              ← Буцах
+            </button>
+            {/* Гарах */}
+            <button
+              onClick={handleLogout}
+              className="text-[11px] px-3 py-1.5 rounded-full border border-slate-200 text-slate-700 hover:bg-slate-50"
+            >
+              Гарах
             </button>
           </div>
         </div>
