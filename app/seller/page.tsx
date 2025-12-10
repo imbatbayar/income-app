@@ -55,9 +55,9 @@ const SELLER_TABS: { id: SellerTabId; label: string }[] = [
   { id: "ASSIGNED",  label: "Сонгосон" },
   { id: "PICKED_UP", label: "Замд" },
   { id: "DELIVERED", label: "Хүргэсэн" },
-  { id: "RETURNED",  label: "Буцаалт" },
   { id: "PAID",      label: "Төлбөр төлсөн" },
   { id: "CLOSED",    label: "Хаагдсан" },
+  { id: "RETURNED",  label: "Буцаалт" },
   { id: "DISPUTE",   label: "Маргаан" }, // ✔ хамгийн сүүлд
 ];
 
@@ -445,10 +445,6 @@ export default function SellerDashboardPage() {
             <h1 className="text-sm font-semibold text-slate-900">
               Худалдагчийн самбар
             </h1>
-            <p className="text-[11px] text-slate-500 mt-1">
-              Нээлттэй, сонгосон, замд, хүргэсэн, буцаалт, төлбөр, хаагдсан,
-              маргаантай бүх захиалгаа эндээс хянаарай.
-            </p>
           </div>
 
           <div className="flex items-center gap-2">
