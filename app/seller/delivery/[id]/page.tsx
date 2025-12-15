@@ -3,23 +3,19 @@
 /* ===========================
  * app/seller/delivery/[id]/page.tsx (FINAL)
  *
- * ✅ Нэг мөр логик:
- * - OPEN: жолоочийн саналуудыг харуулна -> "Сонгох" (ASSIGNED болгоно) + /seller?tab=ASSIGNED
- * - ASSIGNED: "Хүргэлт гарсан" -> ON_ROUTE + /seller?tab=ON_ROUTE  ✅ (1)
- * - DELIVERED: "Төлбөр төлснөө батлах" (seller_marked_paid toggle)
- *              Хэрэв driver_confirmed_payment=true бол CLOSED болно (deliveryLogic.shouldCloseDelivery)
- * - DISPUTE: маргаан нээсэн мэдээлэл харагдана
- * - CANCELLED: "Хаагдсанаас устгах" (seller_hidden=true) ✅ (4)
- *
- * ❌ Жолооч үнэлэх логик байхгүй ✅ (2)
- * ❌ -50 хүргэлт / -1 од policy энд байхгүй ✅ (3)
- *
- * NOTE: Энэ файл FINAL. Дахиж давтаж засахгүй.
+ * ✅ 7 сайжруулалтын энэ хуудсанд хамаарах дүрэм:
+ * 1) UI: Хаанаас/хаашаа/тайлбар/үнэ нь тус тусдаа section
+ * 2) "Хүргэлт гарсан" зөвхөн ASSIGNED (жолооч сонгосны дараа) үед л харагдана
+ * 3) "Маргаан" зөвхөн ON_ROUTE / DELIVERED үед л харагдана
+ * 5) DISPUTE дээр "Шийдэгдсэн" товч байна
+ * 6) "Хаагдсан" бүлгийн (CLOSED/DELIVERED/CANCELLED) хүргэлтүүдийг seller_hidden=true болгож устгаж (нууж) болно
+ * + Map: pickup (ногоон) -> dropoff (улаан) нум зураастай preview (координат байвал)
  * =========================== */
 
 import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import DeliveryRouteMap from "../../../components/Map/DeliveryRouteMap";
 import {
   DeliveryStatus,
   getSellerTabForStatus,
@@ -39,9 +35,17 @@ type IncomeUser = {
 type DeliveryDetail = {
   id: string;
   seller_id: string;
+
   from_address: string | null;
   to_address: string | null;
   note: string | null;
+
+  // ✅ Map coords
+  pickup_lat: number | null;
+  pickup_lng: number | null;
+  dropoff_lat: number | null;
+  dropoff_lng: number | null;
+
   status: DeliveryStatus;
   created_at: string;
   price_mnt: number | null;
@@ -154,6 +158,7 @@ export default function SellerDeliveryDetailPage() {
   const [showDispute, setShowDispute] = useState(false);
   const [disputeReason, setDisputeReason] = useState("");
   const [disputeLoading, setDisputeLoading] = useState(false);
+  const [resolveLoading, setResolveLoading] = useState(false);
 
   // ---------------- auth ----------------
   useEffect(() => {
@@ -192,6 +197,10 @@ export default function SellerDeliveryDetailPage() {
           from_address,
           to_address,
           note,
+          pickup_lat,
+          pickup_lng,
+          dropoff_lat,
+          dropoff_lng,
           status,
           created_at,
           price_mnt,
@@ -223,19 +232,30 @@ export default function SellerDeliveryDetailPage() {
       const d: DeliveryDetail = {
         id: data.id,
         seller_id: data.seller_id,
+
         from_address: data.from_address,
         to_address: data.to_address,
         note: data.note,
+
+        pickup_lat: (data as any).pickup_lat ?? null,
+        pickup_lng: (data as any).pickup_lng ?? null,
+        dropoff_lat: (data as any).dropoff_lat ?? null,
+        dropoff_lng: (data as any).dropoff_lng ?? null,
+
         status: data.status as DeliveryStatus,
         created_at: data.created_at,
         price_mnt: data.price_mnt,
         delivery_type: data.delivery_type,
+
         chosen_driver_id: data.chosen_driver_id,
+
         seller_marked_paid: !!data.seller_marked_paid,
         driver_confirmed_payment: !!data.driver_confirmed_payment,
         closed_at: data.closed_at,
+
         dispute_reason: (data as any).dispute_reason ?? null,
         dispute_opened_at: (data as any).dispute_opened_at ?? null,
+
         seller_hidden: !!(data as any).seller_hidden,
       };
 
@@ -310,7 +330,7 @@ export default function SellerDeliveryDetailPage() {
     }
   }
 
-  // ASSIGNED -> ON_ROUTE  ✅ + redirect
+  // ASSIGNED -> ON_ROUTE  ✅ (харагдах: зөвхөн ASSIGNED үед)
   async function markOnRoute() {
     if (!delivery || !user) return;
 
@@ -441,12 +461,22 @@ export default function SellerDeliveryDetailPage() {
     }
   }
 
-  // hide cancelled (seller_hidden=true) ✅
-  async function hideCancelled() {
+  // ✅ "Хаагдсан" бүлгийн хүргэлтийг устгах (seller_hidden=true)
+  // (CLOSED / DELIVERED / CANCELLED дээр ажиллана)
+  const canHideFromClosedGroup = useMemo(() => {
+    if (!delivery) return false;
+    return (
+      delivery.status === "CLOSED" ||
+      delivery.status === "DELIVERED" ||
+      delivery.status === "CANCELLED"
+    );
+  }, [delivery]);
+
+  async function hideFromClosedGroup() {
     if (!delivery || !user) return;
 
-    if (delivery.status !== "CANCELLED") {
-      setError("Зөвхөн 'Цуцалсан' хүргэлтийг л устгаж (нууж) болно.");
+    if (!canHideFromClosedGroup) {
+      setError("Зөвхөн хаагдсан бүлгийн (Хаагдсан/Хүргэсэн/Цуцалсан) хүргэлтийг л устгаж (нууж) болно.");
       return;
     }
 
@@ -459,8 +489,7 @@ export default function SellerDeliveryDetailPage() {
         .from("deliveries")
         .update({ seller_hidden: true })
         .eq("id", delivery.id)
-        .eq("seller_id", user.id)
-        .eq("status", "CANCELLED");
+        .eq("seller_id", user.id);
 
       if (error) {
         console.error(error);
@@ -468,18 +497,18 @@ export default function SellerDeliveryDetailPage() {
         return;
       }
 
-      setMsg("Цуцалсан хүргэлтийг хаагдсанаас устгалаа.");
+      setMsg("Хаагдсан хүргэлтийг устгалаа (нууснаа).");
       setTimeout(() => router.push("/seller?tab=CLOSED"), 450);
     } finally {
       setHideLoading(false);
     }
   }
 
-  // dispute open (seller)
+  // ✅ Маргаан нээх боломж (Зөвхөн ON_ROUTE / DELIVERED)
   const canOpenDispute = useMemo(() => {
     if (!delivery) return false;
     if (delivery.status === "DISPUTE") return false;
-    return delivery.status === "ASSIGNED" || delivery.status === "ON_ROUTE" || delivery.status === "DELIVERED";
+    return delivery.status === "ON_ROUTE" || delivery.status === "DELIVERED";
   }, [delivery]);
 
   async function openDispute() {
@@ -534,6 +563,42 @@ export default function SellerDeliveryDetailPage() {
     }
   }
 
+  // ✅ Маргааныг "Шийдэгдсэн" болгох (DISPUTE -> CLOSED)
+  async function resolveDispute() {
+    if (!delivery || !user) return;
+    if (delivery.status !== "DISPUTE") return;
+
+    setResolveLoading(true);
+    setError(null);
+    setMsg(null);
+
+    try {
+      const closedAt = new Date().toISOString();
+
+      const { error } = await supabase
+        .from("deliveries")
+        .update({
+          status: "CLOSED",
+          closed_at: closedAt,
+        })
+        .eq("id", delivery.id)
+        .eq("seller_id", user.id)
+        .eq("status", "DISPUTE");
+
+      if (error) {
+        console.error(error);
+        setError("Маргааныг шийдэгдсэн болгоход алдаа гарлаа.");
+        return;
+      }
+
+      setDelivery({ ...delivery, status: "CLOSED", closed_at: closedAt });
+      setMsg("Маргаан шийдэгдлээ. Хүргэлт хаагдлаа.");
+      setTimeout(() => router.push("/seller?tab=CLOSED"), 450);
+    } finally {
+      setResolveLoading(false);
+    }
+  }
+
   // ---------------- UI ----------------
 
   if (loading) {
@@ -552,6 +617,13 @@ export default function SellerDeliveryDetailPage() {
 
   const t = typeLabel(delivery?.delivery_type ?? null);
   const b = delivery ? badge(delivery.status) : null;
+
+  const hasMap =
+    !!delivery &&
+    delivery.pickup_lat != null &&
+    delivery.pickup_lng != null &&
+    delivery.dropoff_lat != null &&
+    delivery.dropoff_lng != null;
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -641,6 +713,20 @@ export default function SellerDeliveryDetailPage() {
               )}
             </section>
 
+            {/* map preview */}
+            {hasMap && (
+              <section className="rounded-2xl border border-slate-200 bg-white p-4 space-y-3">
+                <h2 className="text-sm font-semibold text-slate-900">Хүргэлтийн чиглэл</h2>
+                <div className="overflow-hidden rounded-xl border border-slate-200">
+                  <DeliveryRouteMap
+                    pickup={{ lat: delivery.pickup_lat!, lng: delivery.pickup_lng! }}
+                    dropoff={{ lat: delivery.dropoff_lat!, lng: delivery.dropoff_lng! }}
+                    height={260}
+                  />
+                </div>
+              </section>
+            )}
+
             {/* actions */}
             <section className="rounded-2xl border border-slate-200 bg-white p-4 space-y-3">
               <h2 className="text-sm font-semibold text-slate-900">Үйлдэл</h2>
@@ -666,7 +752,8 @@ export default function SellerDeliveryDetailPage() {
                               {b.driver?.name || "Нэргүй жолооч"}
                             </div>
                             <div className="text-[11px] text-slate-600">
-                              {b.driver?.phone ? `📞 ${b.driver.phone}` : "📞 —"} · Илгээсэн: {fmtDT(b.created_at)}
+                              {b.driver?.phone ? `📞 ${b.driver.phone}` : "📞 —"} · Илгээсэн:{" "}
+                              {fmtDT(b.created_at)}
                             </div>
                           </div>
 
@@ -697,25 +784,44 @@ export default function SellerDeliveryDetailPage() {
 
               {/* Quick actions row */}
               <div className="flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => void markOnRoute()}
-                  disabled={delivery.status !== "ASSIGNED" || markOnRouteLoading}
-                  className="text-xs px-4 py-2 rounded-xl bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-60 disabled:cursor-not-allowed"
-                  title="ASSIGNED -> ON_ROUTE"
-                >
-                  {markOnRouteLoading ? "Тэмдэглэж байна…" : "Хүргэлт гарсан"}
-                </button>
+                {/* ✅ "Хүргэлт гарсан" — зөвхөн ASSIGNED үед ХАРАГДАНА */}
+                {delivery.status === "ASSIGNED" && (
+                  <button
+                    type="button"
+                    onClick={() => void markOnRoute()}
+                    disabled={!delivery.chosen_driver_id || markOnRouteLoading}
+                    className="text-xs px-4 py-2 rounded-xl bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-60 disabled:cursor-not-allowed"
+                    title="ASSIGNED -> ON_ROUTE"
+                  >
+                    {markOnRouteLoading ? "Тэмдэглэж байна…" : "Хүргэлт гарсан"}
+                  </button>
+                )}
 
-                <button
-                  type="button"
-                  onClick={() => setShowDispute(true)}
-                  disabled={!canOpenDispute}
-                  className="text-xs px-4 py-2 rounded-xl border border-rose-300 bg-rose-50 text-rose-700 hover:bg-rose-100 disabled:opacity-60 disabled:cursor-not-allowed"
-                >
-                  Маргаан үүсгэх
-                </button>
+                {/* ✅ Маргаан — зөвхөн ON_ROUTE/DELIVERED үед ХАРАГДАНА */}
+                {(delivery.status === "ON_ROUTE" || delivery.status === "DELIVERED") && (
+                  <button
+                    type="button"
+                    onClick={() => setShowDispute(true)}
+                    className="text-xs px-4 py-2 rounded-xl border border-rose-300 bg-rose-50 text-rose-700 hover:bg-rose-100"
+                  >
+                    Маргаан
+                  </button>
+                )}
 
+                {/* ✅ DISPUTE дээр "Шийдэгдсэн" */}
+                {delivery.status === "DISPUTE" && (
+                  <button
+                    type="button"
+                    onClick={() => void resolveDispute()}
+                    disabled={resolveLoading}
+                    className="text-xs px-4 py-2 rounded-xl bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-60 disabled:cursor-not-allowed"
+                    title="DISPUTE -> CLOSED"
+                  >
+                    {resolveLoading ? "Тэмдэглэж байна…" : "Шийдэгдсэн"}
+                  </button>
+                )}
+
+                {/* Цуцлах (хаагдсанд бол зөвшөөрөхгүй) */}
                 <button
                   type="button"
                   onClick={() => void cancelDelivery()}
@@ -725,10 +831,11 @@ export default function SellerDeliveryDetailPage() {
                   {cancelLoading ? "Цуцалж байна…" : "Цуцлах"}
                 </button>
 
-                {delivery.status === "CANCELLED" && (
+                {/* ✅ Хаагдсан бүлэг дээр устгах (нуух) */}
+                {canHideFromClosedGroup && (
                   <button
                     type="button"
-                    onClick={() => void hideCancelled()}
+                    onClick={() => void hideFromClosedGroup()}
                     disabled={hideLoading}
                     className="text-xs px-4 py-2 rounded-xl bg-slate-900 text-white hover:bg-slate-800 disabled:opacity-60 disabled:cursor-not-allowed"
                     title="seller_hidden=true"
@@ -774,7 +881,7 @@ export default function SellerDeliveryDetailPage() {
                   <div className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 p-3">
                     <div className="text-sm font-semibold text-emerald-800">Хаагдсан</div>
                     <p className="text-xs text-emerald-700 mt-1">
-                      Төлбөрийн тооцоо бүрэн дууссан. {delivery.closed_at ? `(${fmtDT(delivery.closed_at)})` : ""}
+                      {delivery.closed_at ? `(${fmtDT(delivery.closed_at)})` : ""} Төлбөрийн тооцоо дууссан.
                     </p>
                   </div>
                 )}

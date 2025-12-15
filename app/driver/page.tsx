@@ -1,16 +1,19 @@
 "use client";
 
 /* ===========================
- * app/driver/page.tsx (FINAL)
+ * app/driver/page.tsx (FINAL v4)
  *
- * ✅ OPEN: карт дээрээс "Авах хүсэлт" (driver_bids insert) / "Хүсэлт цуцлах" (delete)
- * ✅ ASSIGNED: "Замд гарсан" -> ON_ROUTE
- * ✅ ON_ROUTE: "Хүргэлсэн" -> DELIVERED
- * ✅ DELIVERED: "Төлбөр авснаа батлах" -> driver_confirmed_payment toggle
- *    Хэрэв seller_marked_paid=true бол CLOSED болно (shouldCloseDelivery)
- * ✅ Маргаан: ON_ROUTE / DELIVERED үед (canOpenDisputeForDriver)
+ * ✅ ШИНЭ ЛОГИК:
+ * - "Нээлттэй" таб: OPEN хүргэлтүүд (миний хүсэлт байхгүй)
+ * - "Хүсэлт" таб: OPEN хүргэлтүүд (миний хүсэлттэй)
+ * - "Намайг сонгосон": ASSIGNED + chosen_driver_id = me
+ * - "Замд" / "Хүргэсэн" / "Хаагдсан" / "Маргаан": зөвхөн миний оноогдсон хүргэлтүүд
+ * - Хүсэлт таб дээрээс цуцалбал -> Нээлттэй рүү буцна
+ * - Сонгогдсон (ASSIGNED) бол цуцлах боломжгүй (зөвхөн seller л цуцална)
  *
- * ❌ Жолооч үнэлэх/одуулах UI энд байхгүй
+ * ✅ QUICK:
+ * - DELIVERED дээр "Төлбөр авсан" quick товч
+ * - CLOSED дээр "Хаагдсанаас устгах" (driver_hidden=true)
  * =========================== */
 
 import { useEffect, useMemo, useState } from "react";
@@ -20,7 +23,7 @@ import {
   DeliveryStatus,
   DRIVER_TABS,
   DriverTabId,
-  canOpenDisputeForDriver,
+  getDriverTabForStatus,
   shouldCloseDelivery,
 } from "@/lib/deliveryLogic";
 
@@ -37,11 +40,14 @@ type IncomeUser = {
 type DeliveryRow = {
   id: string;
   seller_id: string;
+
   from_address: string | null;
   to_address: string | null;
   note: string | null;
+
   status: DeliveryStatus;
   created_at: string;
+
   price_mnt: number | null;
   delivery_type: string | null;
 
@@ -49,20 +55,19 @@ type DeliveryRow = {
 
   seller_marked_paid: boolean;
   driver_confirmed_payment: boolean;
+
+  dispute_opened_at: string | null;
   closed_at: string | null;
 
-  dispute_reason: string | null;
-  dispute_opened_at: string | null;
-
-  seller_hidden: boolean;
-
-  // dashboard-only
-  has_bid?: boolean;
+  driver_hidden: boolean;
 };
 
-const TAB_IDS: DriverTabId[] = DRIVER_TABS.map((t) => t.id);
-
-// ---------------- helpers ----------------
+type BidLite = {
+  id: string;
+  driver_id: string;
+  delivery_id: string;
+  created_at: string;
+};
 
 function fmtPrice(n: number | null | undefined) {
   const v = Number(n || 0);
@@ -74,12 +79,12 @@ function fmtDT(iso: string | null | undefined) {
   try {
     return new Date(iso).toLocaleString("mn-MN", { hour12: false });
   } catch {
-    return iso;
+    return String(iso);
   }
 }
 
-function shorten(s: string | null, max = 110) {
-  if (!s) return "";
+function shorten(s: string | null, max = 70) {
+  if (!s) return "—";
   const t = s.trim();
   if (t.length <= max) return t;
   return t.slice(0, max).replace(/\s+$/, "") + "…";
@@ -105,7 +110,7 @@ function badge(status: DeliveryStatus) {
     case "OPEN":
       return { text: "Нээлттэй", cls: "bg-emerald-50 text-emerald-700 border-emerald-100" };
     case "ASSIGNED":
-      return { text: "Намайг сонгосон", cls: "bg-sky-50 text-sky-700 border-sky-100" };
+      return { text: "Оносон", cls: "bg-sky-50 text-sky-700 border-sky-100" };
     case "ON_ROUTE":
       return { text: "Замд", cls: "bg-indigo-50 text-indigo-700 border-indigo-100" };
     case "DELIVERED":
@@ -121,57 +126,47 @@ function badge(status: DeliveryStatus) {
   }
 }
 
-function filterByTab(tab: DriverTabId, items: DeliveryRow[], driverId: string) {
-  return items.filter((d) => {
-    // OPEN таб: зөвхөн OPEN
-    if (tab === "OPEN") return d.status === "OPEN";
+function Pill({
+  label,
+  value,
+  accent = "slate",
+}: {
+  label: string;
+  value: string;
+  accent?: "emerald" | "rose" | "sky" | "slate";
+}) {
+  const acc =
+    accent === "emerald"
+      ? "bg-emerald-50 border-emerald-100 text-emerald-800"
+      : accent === "rose"
+      ? "bg-rose-50 border-rose-100 text-rose-800"
+      : accent === "sky"
+      ? "bg-sky-50 border-sky-100 text-sky-800"
+      : "bg-slate-50 border-slate-200 text-slate-800";
 
-    // бусад табууд: зөвхөн өөрт оноогдсон хүргэлтүүд
-    const isMine = d.chosen_driver_id === driverId;
-
-    switch (tab) {
-      case "ASSIGNED":
-        return isMine && d.status === "ASSIGNED";
-      case "ON_ROUTE":
-        return isMine && d.status === "ON_ROUTE";
-      case "DELIVERED":
-        return isMine && d.status === "DELIVERED";
-      case "DISPUTE":
-        return isMine && d.status === "DISPUTE";
-      case "CLOSED":
-        return isMine && (d.status === "CLOSED" || d.status === "CANCELLED");
-      default:
-        return false;
-    }
-  });
+  return (
+    <div className={`rounded-xl border px-3 py-2 ${acc}`}>
+      <div className="text-[11px] opacity-70">{label}</div>
+      <div className="text-sm font-semibold leading-snug">{value}</div>
+    </div>
+  );
 }
-
-// ---------------- page ----------------
 
 export default function DriverDashboardPage() {
   const router = useRouter();
   const sp = useSearchParams();
 
   const [user, setUser] = useState<IncomeUser | null>(null);
-  const [loadingUser, setLoadingUser] = useState(true);
-
   const [activeTab, setActiveTab] = useState<DriverTabId>("OPEN");
 
   const [loading, setLoading] = useState(true);
-  const [deliveries, setDeliveries] = useState<DeliveryRow[]>([]);
-
+  const [items, setItems] = useState<DeliveryRow[]>([]);
+  const [myBids, setMyBids] = useState<Record<string, BidLite>>({});
   const [error, setError] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
-
-  // per-delivery loading flags
   const [actLoading, setActLoading] = useState<Record<string, boolean>>({});
 
-  // dispute modal
-  const [showDispute, setShowDispute] = useState(false);
-  const [disputeReason, setDisputeReason] = useState("");
-  const [disputeDeliveryId, setDisputeDeliveryId] = useState<string | null>(null);
-
-  // ---------------- auth ----------------
+  // auth
   useEffect(() => {
     try {
       const raw = window.localStorage.getItem("incomeUser");
@@ -181,23 +176,21 @@ export default function DriverDashboardPage() {
       setUser(u);
     } catch {
       router.replace("/");
-    } finally {
-      setLoadingUser(false);
     }
   }, [router]);
 
-  // ---------------- tab init ----------------
+  // init tab
   useEffect(() => {
     const urlTab = sp.get("tab");
-    if (urlTab && TAB_IDS.includes(urlTab as DriverTabId)) {
+    const valid = DRIVER_TABS.some((t) => t.id === (urlTab as any));
+    if (urlTab && valid) {
       setActiveTab(urlTab as DriverTabId);
       localStorage.setItem("driverActiveTab", urlTab);
       return;
     }
     const stored = localStorage.getItem("driverActiveTab");
-    if (stored && TAB_IDS.includes(stored as DriverTabId)) {
-      setActiveTab(stored as DriverTabId);
-    }
+    const validStored = DRIVER_TABS.some((t) => t.id === (stored as any));
+    if (stored && validStored) setActiveTab(stored as DriverTabId);
   }, [sp]);
 
   function changeTab(tab: DriverTabId) {
@@ -206,29 +199,29 @@ export default function DriverDashboardPage() {
     router.push(`/driver?tab=${tab}`);
   }
 
-  // ---------------- fetch ----------------
+  // fetch
   useEffect(() => {
     if (!user) return;
-    void fetchDeliveries(user.id);
+    void fetchAll(user.id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id]);
 
-  // focus refresh
   useEffect(() => {
     if (!user) return;
-    const onFocus = () => void fetchDeliveries(user.id);
+    const onFocus = () => void fetchAll(user.id);
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id]);
 
-  async function fetchDeliveries(driverId: string) {
+  async function fetchAll(driverId: string) {
     setLoading(true);
     setError(null);
 
     try {
-      // 1) OPEN deliveries (seller_hidden=false)
-      const { data: openData, error: e1 } = await supabase
+      // ✅ OPEN бүх хүргэлтүүд (driver_hidden шүүлт хийнэ)
+      // ✅ Бусад төлөвүүд: зөвхөн надад оноогдсон
+      const { data, error: e1 } = await supabase
         .from("deliveries")
         .select(
           `
@@ -244,647 +237,418 @@ export default function DriverDashboardPage() {
           chosen_driver_id,
           seller_marked_paid,
           driver_confirmed_payment,
-          closed_at,
-          dispute_reason,
           dispute_opened_at,
-          seller_hidden
+          closed_at,
+          driver_hidden
         `
         )
-        .eq("status", "OPEN")
-        .eq("seller_hidden", false)
+        .or(`status.eq.OPEN,chosen_driver_id.eq.${driverId}`)
+        .eq("driver_hidden", false)
         .order("created_at", { ascending: false });
 
       if (e1) throw e1;
 
-      // 2) My assigned deliveries
-      const { data: mineData, error: e2 } = await supabase
-        .from("deliveries")
-        .select(
-          `
-          id,
-          seller_id,
-          from_address,
-          to_address,
-          note,
-          status,
-          created_at,
-          price_mnt,
-          delivery_type,
-          chosen_driver_id,
-          seller_marked_paid,
-          driver_confirmed_payment,
-          closed_at,
-          dispute_reason,
-          dispute_opened_at,
-          seller_hidden
-        `
-        )
-        .eq("chosen_driver_id", driverId)
-        .eq("seller_hidden", false)
-        .order("created_at", { ascending: false });
+      const base: DeliveryRow[] = (data || []).map((d: any) => ({
+        id: d.id,
+        seller_id: d.seller_id,
+        from_address: d.from_address,
+        to_address: d.to_address,
+        note: d.note,
+        status: d.status,
+        created_at: d.created_at,
+        price_mnt: d.price_mnt,
+        delivery_type: d.delivery_type,
+        chosen_driver_id: d.chosen_driver_id,
+        seller_marked_paid: !!d.seller_marked_paid,
+        driver_confirmed_payment: !!d.driver_confirmed_payment,
+        dispute_opened_at: d.dispute_opened_at,
+        closed_at: d.closed_at,
+        driver_hidden: !!d.driver_hidden,
+      }));
+
+      // my bids
+      const { data: bids, error: e2 } = await supabase
+        .from("driver_bids")
+        .select("id, driver_id, delivery_id, created_at")
+        .eq("driver_id", driverId);
 
       if (e2) throw e2;
 
-      // merge map
-      const map = new Map<string, DeliveryRow>();
+      const bm: Record<string, BidLite> = {};
+      (bids || []).forEach((b: any) => {
+        bm[b.delivery_id] = b;
+      });
 
-      function normalize(d: any): DeliveryRow {
-        return {
-          id: d.id,
-          seller_id: d.seller_id,
-          from_address: d.from_address,
-          to_address: d.to_address,
-          note: d.note,
-          status: d.status as DeliveryStatus,
-          created_at: d.created_at,
-          price_mnt: d.price_mnt,
-          delivery_type: d.delivery_type,
-          chosen_driver_id: d.chosen_driver_id,
-          seller_marked_paid: !!d.seller_marked_paid,
-          driver_confirmed_payment: !!d.driver_confirmed_payment,
-          closed_at: d.closed_at,
-          dispute_reason: d.dispute_reason ?? null,
-          dispute_opened_at: d.dispute_opened_at ?? null,
-          seller_hidden: !!d.seller_hidden,
-        };
-      }
-
-      for (const d of openData || []) map.set(d.id, normalize(d));
-      for (const d of mineData || []) map.set(d.id, normalize(d));
-
-      const merged = Array.from(map.values());
-
-      // 3) My bids set
-      const { data: bidData, error: e3 } = await supabase
-        .from("driver_bids")
-        .select("delivery_id")
-        .eq("driver_id", driverId);
-
-      if (e3) {
-        console.error(e3);
-      }
-
-      const bidSet = new Set<string>((bidData || []).map((b: any) => String(b.delivery_id)));
-
-      // attach has_bid
-      const withBidFlag = merged.map((d) =>
-        d.status === "OPEN" ? { ...d, has_bid: bidSet.has(d.id) } : d
-      );
-
-      setDeliveries(withBidFlag);
-    } catch (e) {
+      setItems(base);
+      setMyBids(bm);
+      setMsg(null);
+    } catch (e: any) {
       console.error(e);
-      setDeliveries([]);
-      setError("Жагсаалт татахад алдаа гарлаа.");
+      setError("Өгөгдөл татахад алдаа гарлаа. Дахин оролдоно уу.");
     } finally {
       setLoading(false);
     }
   }
 
-  // ---------------- actions ----------------
+  // --------- ACTIONS ---------
 
-  function setLoadingFor(id: string, val: boolean) {
-    setActLoading((prev) => ({ ...prev, [id]: val }));
-  }
-
-  async function requestOpenDelivery(deliveryId: string) {
+  async function placeBid(deliveryId: string) {
     if (!user) return;
+    setActLoading((p) => ({ ...p, [deliveryId]: true }));
     setError(null);
     setMsg(null);
-    setLoadingFor(deliveryId, true);
 
     try {
-      const { error } = await supabase
+      const { data, error: e1 } = await supabase
         .from("driver_bids")
-        .insert({ delivery_id: deliveryId, driver_id: user.id });
+        .insert({ delivery_id: deliveryId, driver_id: user.id })
+        .select("id, driver_id, delivery_id, created_at")
+        .maybeSingle();
 
-      if (error) {
-        console.error(error);
-        setError("Авах хүсэлт илгээхэд алдаа гарлаа.");
-        return;
-      }
+      if (e1) throw e1;
 
-      setDeliveries((prev) =>
-        prev.map((d) => (d.id === deliveryId ? { ...d, has_bid: true } : d))
-      );
+      setMyBids((p) => ({ ...p, [deliveryId]: data as any }));
       setMsg("Авах хүсэлт илгээлээ.");
+      changeTab("REQUESTS");
+    } catch (e: any) {
+      console.error(e);
+      setError("Хүсэлт илгээхэд алдаа гарлаа.");
     } finally {
-      setLoadingFor(deliveryId, false);
+      setActLoading((p) => ({ ...p, [deliveryId]: false }));
     }
   }
 
-  async function cancelMyBid(deliveryId: string) {
+  async function cancelBid(deliveryId: string) {
     if (!user) return;
+    const b = myBids[deliveryId];
+    if (!b) return;
+
+    // ✅ Сонгогдсон бол цуцлахгүй (OPEN дээр л цуцлах боломжтой)
+    const cur = items.find((x) => x.id === deliveryId);
+    if (cur && cur.status !== "OPEN") {
+      setError("Сонгогдсон/явж буй хүргэлт дээр хүсэлт цуцлах боломжгүй.");
+      return;
+    }
+
+    setActLoading((p) => ({ ...p, [deliveryId]: true }));
     setError(null);
     setMsg(null);
-    setLoadingFor(deliveryId, true);
 
     try {
-      const { error } = await supabase
+      const { error: e1 } = await supabase
         .from("driver_bids")
         .delete()
-        .eq("delivery_id", deliveryId)
+        .eq("id", b.id)
         .eq("driver_id", user.id);
 
-      if (error) {
-        console.error(error);
-        setError("Хүсэлт цуцлахад алдаа гарлаа.");
-        return;
-      }
+      if (e1) throw e1;
 
-      setDeliveries((prev) =>
-        prev.map((d) => (d.id === deliveryId ? { ...d, has_bid: false } : d))
-      );
-      setMsg("Хүсэлт цуцлагдлаа.");
-    } finally {
-      setLoadingFor(deliveryId, false);
-    }
-  }
-
-  async function updateStatusMine(deliveryId: string, from: DeliveryStatus, to: DeliveryStatus) {
-    if (!user) return;
-    setError(null);
-    setMsg(null);
-    setLoadingFor(deliveryId, true);
-
-    try {
-      const { error } = await supabase
-        .from("deliveries")
-        .update({ status: to })
-        .eq("id", deliveryId)
-        .eq("chosen_driver_id", user.id)
-        .eq("status", from);
-
-      if (error) {
-        console.error(error);
-        setError("Статус шинэчлэхэд алдаа гарлаа.");
-        return;
-      }
-
-      setDeliveries((prev) =>
-        prev.map((d) => (d.id === deliveryId ? { ...d, status: to } : d))
-      );
-
-      // redirect to matching tab
-      localStorage.setItem("driverActiveTab", to === "CANCELLED" || to === "CLOSED" ? "CLOSED" : (to as any));
-      router.push(`/driver?tab=${to === "CANCELLED" || to === "CLOSED" ? "CLOSED" : to}`);
-    } finally {
-      setLoadingFor(deliveryId, false);
-    }
-  }
-
-  async function toggleDriverPayment(deliveryId: string) {
-    if (!user) return;
-    const d = deliveries.find((x) => x.id === deliveryId);
-    if (!d) return;
-
-    if (!(d.status === "DELIVERED" || d.status === "CLOSED")) {
-      setError("Зөвхөн 'Хүргэсэн' үед төлбөр батална.");
-      return;
-    }
-    if (d.chosen_driver_id !== user.id) {
-      setError("Энэ хүргэлт танд оноогдоогүй байна.");
-      return;
-    }
-
-    setError(null);
-    setMsg(null);
-    setLoadingFor(deliveryId, true);
-
-    try {
-      const nextPaid = !d.driver_confirmed_payment;
-
-      const willClose = shouldCloseDelivery({
-        status: d.status,
-        seller_marked_paid: d.seller_marked_paid,
-        driver_confirmed_payment: nextPaid,
+      setMyBids((p) => {
+        const c = { ...p };
+        delete c[deliveryId];
+        return c;
       });
 
-      const nextStatus: DeliveryStatus = willClose ? "CLOSED" : d.status;
-      const closedAt = willClose ? new Date().toISOString() : d.closed_at;
+      setMsg("Хүсэлт цуцлагдлаа.");
+      changeTab("OPEN");
+    } catch (e: any) {
+      console.error(e);
+      setError("Хүсэлт цуцлахад алдаа гарлаа.");
+    } finally {
+      setActLoading((p) => ({ ...p, [deliveryId]: false }));
+    }
+  }
 
-      const { error } = await supabase
+  async function quickConfirmPayment(deliveryId: string) {
+    if (!user) return;
+
+    setActLoading((p) => ({ ...p, [deliveryId]: true }));
+    setError(null);
+    setMsg(null);
+
+    try {
+      const cur = items.find((x) => x.id === deliveryId);
+      if (!cur) return;
+
+      if (!(cur.status === "DELIVERED" && cur.chosen_driver_id === user.id)) {
+        setError("Зөвхөн 'Хүргэсэн' үед төлбөр батална.");
+        return;
+      }
+
+      const next = true;
+      const willClose = shouldCloseDelivery({
+        status: cur.status,
+        seller_marked_paid: cur.seller_marked_paid,
+        driver_confirmed_payment: next,
+      });
+
+      const nextStatus: DeliveryStatus = willClose ? "CLOSED" : "DELIVERED";
+      const closedAt = willClose ? new Date().toISOString() : cur.closed_at;
+
+      const { error: e1 } = await supabase
         .from("deliveries")
         .update({
-          driver_confirmed_payment: nextPaid,
+          driver_confirmed_payment: next,
           status: nextStatus,
           closed_at: closedAt,
         })
         .eq("id", deliveryId)
-        .eq("chosen_driver_id", user.id);
+        .eq("chosen_driver_id", user.id)
+        .eq("status", "DELIVERED");
 
-      if (error) {
-        console.error(error);
-        setError("Төлбөр батлахад алдаа гарлаа.");
-        return;
-      }
+      if (e1) throw e1;
 
-      setDeliveries((prev) =>
-        prev.map((x) =>
-          x.id === deliveryId
-            ? { ...x, driver_confirmed_payment: nextPaid, status: nextStatus, closed_at: closedAt }
-            : x
-        )
-      );
-
-      setMsg(nextPaid ? "Төлбөр авснаа баталлаа." : "Төлбөрийн баталгааг цуцаллаа.");
-
-      if (nextStatus === "CLOSED") {
-        localStorage.setItem("driverActiveTab", "CLOSED");
-        router.push("/driver?tab=CLOSED");
-      }
+      await fetchAll(user.id);
+      setMsg("Төлбөр авснаа баталлаа.");
+    } catch (e: any) {
+      console.error(e);
+      setError("Төлбөр батлахад алдаа гарлаа.");
     } finally {
-      setLoadingFor(deliveryId, false);
+      setActLoading((p) => ({ ...p, [deliveryId]: false }));
     }
   }
 
-  function openDisputeModal(deliveryId: string) {
-    setDisputeDeliveryId(deliveryId);
-    setDisputeReason("");
-    setShowDispute(true);
-  }
-
-  async function submitDispute() {
+  async function hideClosedForDriver(deliveryId: string) {
     if (!user) return;
-    if (!disputeDeliveryId) return;
-
-    const d = deliveries.find((x) => x.id === disputeDeliveryId);
-    if (!d) return;
-
-    if (d.chosen_driver_id !== user.id) {
-      setError("Энэ хүргэлт танд оноогдоогүй байна.");
-      return;
-    }
-    if (!canOpenDisputeForDriver(d.status)) {
-      setError("Энэ төлөв дээр маргаан нээх боломжгүй.");
-      return;
-    }
-
-    const reason = disputeReason.trim();
-    if (!reason) {
-      setError("Маргааны шалтгаанаа бичнэ үү.");
-      return;
-    }
-
+    setActLoading((p) => ({ ...p, [deliveryId]: true }));
     setError(null);
     setMsg(null);
-    setLoadingFor(disputeDeliveryId, true);
 
     try {
-      const openedAt = new Date().toISOString();
-
-      const { error } = await supabase
+      const { error: e1 } = await supabase
         .from("deliveries")
-        .update({
-          status: "DISPUTE",
-          dispute_reason: reason,
-          dispute_opened_at: openedAt,
-        })
-        .eq("id", disputeDeliveryId)
-        .eq("chosen_driver_id", user.id);
+        .update({ driver_hidden: true })
+        .eq("id", deliveryId);
 
-      if (error) {
-        console.error(error);
-        setError("Маргаан нээхэд алдаа гарлаа.");
-        return;
-      }
+      if (e1) throw e1;
 
-      setDeliveries((prev) =>
-        prev.map((x) =>
-          x.id === disputeDeliveryId
-            ? { ...x, status: "DISPUTE", dispute_reason: reason, dispute_opened_at: openedAt }
-            : x
-        )
-      );
-
-      setShowDispute(false);
-      setDisputeDeliveryId(null);
-      setDisputeReason("");
-      setMsg("Маргаан нээгдлээ.");
-
-      localStorage.setItem("driverActiveTab", "DISPUTE");
-      router.push("/driver?tab=DISPUTE");
+      await fetchAll(user.id);
+      setMsg("Хаагдсанаас устгалаа.");
+    } catch (e: any) {
+      console.error(e);
+      setError("Устгахад алдаа гарлаа.");
     } finally {
-      setLoadingFor(disputeDeliveryId, false);
+      setActLoading((p) => ({ ...p, [deliveryId]: false }));
     }
   }
 
-  // ---------------- derived ----------------
+  // --------- FILTER + COUNTS ---------
 
   const filtered = useMemo(() => {
     if (!user) return [];
-    return filterByTab(activeTab, deliveries, user.id);
-  }, [activeTab, deliveries, user]);
+
+    return items.filter((d) => {
+      // OPEN ба REQUESTS нь OPEN статус дээр "myBid" байгаа/эсэхээр сална
+      const hasMyBid = !!myBids[d.id];
+      const isMine = d.chosen_driver_id === user.id;
+
+      if (activeTab === "OPEN") {
+        return d.status === "OPEN" && !hasMyBid;
+      }
+      if (activeTab === "REQUESTS") {
+        return d.status === "OPEN" && hasMyBid;
+      }
+
+      // бусад табууд: status + зөвхөн миний оноогдсон
+      return getDriverTabForStatus(d.status) === activeTab && isMine;
+    });
+  }, [activeTab, items, myBids, user]);
 
   const tabCounts = useMemo(() => {
-    if (!user) return {} as Record<DriverTabId, number>;
-    return DRIVER_TABS.reduce((acc, t) => {
-      acc[t.id] = filterByTab(t.id, deliveries, user.id).length;
-      return acc;
-    }, {} as Record<DriverTabId, number>);
-  }, [deliveries, user]);
+    if (!user) return Object.fromEntries(DRIVER_TABS.map((t) => [t.id, 0])) as Record<string, number>;
 
-  const openWithoutBid = useMemo(() => {
-    if (!user) return [];
-    return deliveries
-      .filter((d) => d.status === "OPEN" && !d.has_bid)
-      .sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
-  }, [deliveries, user]);
+    const c: Record<string, number> = {};
+    for (const t of DRIVER_TABS) c[t.id] = 0;
 
-  const openWithBid = useMemo(() => {
-    if (!user) return [];
-    return deliveries
-      .filter((d) => d.status === "OPEN" && !!d.has_bid)
-      .sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
-  }, [deliveries, user]);
+    for (const d of items) {
+      const hasMyBid = !!myBids[d.id];
+      const isMine = d.chosen_driver_id === user.id;
 
-  // ---------------- UI ----------------
+      if (d.status === "OPEN") {
+        if (hasMyBid) c["REQUESTS"] = (c["REQUESTS"] || 0) + 1;
+        else c["OPEN"] = (c["OPEN"] || 0) + 1;
+        continue;
+      }
 
-  if (loadingUser || loading) {
-    return (
-      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
-        <div className="text-sm text-slate-500">Ачаалж байна…</div>
-      </div>
-    );
-  }
+      // бусад төлөвүүд зөвхөн минийхийг тоолно
+      if (!isMine) continue;
 
-  if (!user) return null;
+      const tab = getDriverTabForStatus(d.status);
+      c[tab] = (c[tab] || 0) + 1;
+    }
 
-  function logout() {
-    localStorage.removeItem("incomeUser");
-    router.replace("/");
-  }
+    return c;
+  }, [items, myBids, user]);
 
-  function Card({ d, driverId }: { d: DeliveryRow; driverId: string }) {
-
-    const t = typeLabel(d.delivery_type);
-    const b = badge(d.status);
-
-    const isMine = d.chosen_driver_id === driverId;
-
-    const isOpen = d.status === "OPEN";
-    const isAssigned = isMine && d.status === "ASSIGNED";
-    const isOnRoute = isMine && d.status === "ON_ROUTE";
-    const isDelivered = isMine && d.status === "DELIVERED";
-    const canDispute = isMine && canOpenDisputeForDriver(d.status) && d.status !== "DISPUTE";
-
-    return (
-      <div
-        className="rounded-2xl border border-slate-200 bg-white px-4 py-4 hover:bg-slate-50 transition"
-      >
-        <button
-          onClick={() => router.push(`/driver/delivery/${d.id}?tab=${activeTab}`)}
-          className="w-full text-left"
-        >
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <span className="text-xs">{t.icon}</span>
-                <div className="text-sm font-semibold text-slate-900 truncate">
-                  {t.label} #{d.id.slice(0, 6)}
-                </div>
-                <span className={`text-[10px] px-2 py-1 rounded-full border ${b.cls}`}>
-                  {b.text}
-                </span>
-              </div>
-
-              <div className="mt-2 space-y-1">
-                <div className="text-[11px] text-slate-500">Үүсгэсэн: {fmtDT(d.created_at)}</div>
-                <div className="text-xs text-slate-700">
-                  <span className="font-semibold text-slate-600">Авах:</span>{" "}
-                  {shorten(d.from_address, 80) || "—"}
-                </div>
-                <div className="text-xs text-slate-700">
-                  <span className="font-semibold text-slate-600">Хүргэх:</span>{" "}
-                  {shorten(d.to_address, 80) || "—"}
-                </div>
-                {d.note && <div className="text-[11px] text-slate-500">{shorten(d.note, 90)}</div>}
-              </div>
-            </div>
-
-            <div className="text-right shrink-0">
-              <div className="text-[11px] text-slate-500">Үнэ</div>
-              <div className="text-sm font-semibold text-slate-900">{fmtPrice(d.price_mnt)}</div>
-            </div>
-          </div>
-        </button>
-
-        {/* ✅ QUICK BUTTONS (карт дээр) */}
-        <div className="mt-3 flex flex-wrap gap-2">
-          {/* OPEN: bid */}
-          {isOpen && !d.has_bid && (
-            <button
-              onClick={() => void requestOpenDelivery(d.id)}
-              disabled={!!actLoading[d.id]}
-              className="text-[11px] px-4 py-2 rounded-full bg-emerald-600 text-white font-semibold disabled:opacity-60"
-            >
-              {actLoading[d.id] ? "Илгээж байна…" : "Авах хүсэлт"}
-            </button>
-          )}
-
-          {isOpen && !!d.has_bid && (
-            <button
-              onClick={() => void cancelMyBid(d.id)}
-              disabled={!!actLoading[d.id]}
-              className="text-[11px] px-4 py-2 rounded-full bg-slate-900 text-white font-semibold disabled:opacity-60"
-            >
-              {actLoading[d.id] ? "Цуцалж байна…" : "Хүсэлт цуцлах"}
-            </button>
-          )}
-
-          {/* ASSIGNED -> ON_ROUTE */}
-          {isAssigned && (
-            <button
-              onClick={() => void updateStatusMine(d.id, "ASSIGNED", "ON_ROUTE")}
-              disabled={!!actLoading[d.id]}
-              className="text-[11px] px-4 py-2 rounded-full bg-indigo-600 text-white font-semibold disabled:opacity-60"
-              title="ASSIGNED -> ON_ROUTE"
-            >
-              {actLoading[d.id] ? "Тэмдэглэж байна…" : "Замд гарсан"}
-            </button>
-          )}
-
-          {/* ON_ROUTE -> DELIVERED */}
-          {isOnRoute && (
-            <button
-              onClick={() => void updateStatusMine(d.id, "ON_ROUTE", "DELIVERED")}
-              disabled={!!actLoading[d.id]}
-              className="text-[11px] px-4 py-2 rounded-full bg-amber-600 text-white font-semibold disabled:opacity-60"
-              title="ON_ROUTE -> DELIVERED"
-            >
-              {actLoading[d.id] ? "Тэмдэглэж байна…" : "Хүргэлсэн"}
-            </button>
-          )}
-
-          {/* DELIVERED: confirm payment */}
-          {isDelivered && (
-            <button
-              onClick={() => void toggleDriverPayment(d.id)}
-              disabled={!!actLoading[d.id]}
-              className="text-[11px] px-4 py-2 rounded-full bg-slate-900 text-white font-semibold disabled:opacity-60"
-            >
-              {actLoading[d.id]
-                ? "Баталж байна…"
-                : d.driver_confirmed_payment
-                ? "Төлбөр баталгааг цуцлах"
-                : "Төлбөр авснаа батлах"}
-            </button>
-          )}
-
-          {/* dispute */}
-          {canDispute && (
-            <button
-              onClick={() => openDisputeModal(d.id)}
-              disabled={!!actLoading[d.id]}
-              className="text-[11px] px-4 py-2 rounded-full border border-rose-300 bg-rose-50 text-rose-700 font-semibold disabled:opacity-60"
-            >
-              Маргаан
-            </button>
-          )}
-
-          {/* detail shortcut */}
-          <button
-            onClick={() => router.push(`/driver/delivery/${d.id}?tab=${activeTab}`)}
-            className="text-[11px] px-4 py-2 rounded-full border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
-          >
-            Дэлгэрэнгүй
-          </button>
-        </div>
-      </div>
-    );
-  }
+  // --------- UI ---------
 
   return (
     <div className="min-h-screen bg-slate-50">
-      <header className="border-b border-slate-200 bg-white">
-        <div className="max-w-3xl mx-auto px-4 py-4 flex items-center justify-between">
-          <h1 className="text-sm font-semibold">Жолоочийн самбар</h1>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={logout}
-              className="text-[11px] px-4 py-2 rounded-full border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
-            >
-              Гарах
-            </button>
-          </div>
+      <div className="mx-auto max-w-5xl px-4 pb-12 pt-6">
+        <div className="mb-4">
+          <div className="text-xs text-slate-500">Жолооч</div>
         </div>
-      </header>
 
-      <main className="max-w-3xl mx-auto px-4 py-5 space-y-4">
-        {msg && (
-          <div className="rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-2 text-xs">
-            {msg}
-          </div>
-        )}
+        <div className="mb-5 flex flex-wrap gap-2">
+          {DRIVER_TABS.map((t) => {
+            const isActive = t.id === activeTab;
+            const n = tabCounts[t.id] || 0;
+            return (
+              <button
+                key={t.id}
+                onClick={() => changeTab(t.id)}
+                className={`rounded-xl border px-3 py-2 text-sm font-semibold transition ${
+                  isActive
+                    ? "border-slate-900 bg-white text-slate-900 shadow-sm"
+                    : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"
+                }`}
+              >
+                {t.label} <span className="ml-1 text-xs opacity-70">({n})</span>
+              </button>
+            );
+          })}
+        </div>
+
         {error && (
-          <div className="rounded-2xl border border-rose-100 bg-rose-50 px-4 py-2 text-xs">
+          <div className="mb-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">
             {error}
           </div>
         )}
+        {msg && (
+          <div className="mb-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+            {msg}
+          </div>
+        )}
 
-        {/* Tabs */}
-        <div className="rounded-2xl border border-slate-200 bg-white px-2 py-2 flex flex-wrap gap-1">
-          {DRIVER_TABS.map((tab) => (
-            <button
-              key={tab.id}
-              onClick={() => changeTab(tab.id)}
-              className={
-                "text-[11px] px-3 py-1.5 rounded-full border " +
-                (tab.id === activeTab
-                  ? "bg-emerald-600 text-white border-emerald-600"
-                  : "bg-white text-slate-600 border-slate-200")
-              }
-            >
-              {tab.label}
-              {tabCounts[tab.id] > 0 && <span className="ml-1">({tabCounts[tab.id]})</span>}
-            </button>
-          ))}
-        </div>
-
-        {/* OPEN tab special grouping */}
-        {activeTab === "OPEN" ? (
-          <div className="space-y-5">
-            {openWithoutBid.length > 0 && (
-              <div className="space-y-2">
-                <p className="px-1 text-[11px] font-medium text-slate-600">Нээлттэй захиалгууд</p>
-                <div className="space-y-3">
-                  {openWithoutBid.map((d) => (
-                    <Card key={d.id} d={d} driverId={user.id} />
-
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {openWithBid.length > 0 && (
-              <div className="space-y-2">
-                <p className="px-1 text-[11px] font-medium text-slate-600">Миний өгсөн саналууд</p>
-                <div className="space-y-3">
-                  {openWithBid.map((d) => (
-                    <Card key={d.id} d={d} driverId={user.id} />
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {openWithoutBid.length === 0 && openWithBid.length === 0 && (
-              <div className="rounded-2xl border border-slate-200 bg-white px-4 py-4 text-sm text-slate-500">
-                Нээлттэй хүргэлт алга байна.
-              </div>
-            )}
+        {loading ? (
+          <div className="rounded-2xl border border-slate-200 bg-white p-6 text-slate-600">Ачаалж байна…</div>
+        ) : filtered.length === 0 ? (
+          <div className="rounded-2xl border border-slate-200 bg-white p-6 text-slate-600">
+            Энэ таб дээр одоогоор хүргэлт алга.
           </div>
         ) : (
-          <section className="space-y-3">
-            {filtered.length === 0 ? (
-              <div className="rounded-2xl border border-slate-200 bg-white px-4 py-4 text-sm text-slate-500">
-                Энэ таб дээр хүргэлт алга байна.
-              </div>
-            ) : (
-              filtered.map((d) => <Card key={d.id} d={d} driverId={user.id} />)
-            )}
-          </section>
-        )}
-      </main>
+          <div className="grid gap-4">
+            {filtered.map((d) => {
+              const b = badge(d.status);
+              const t = typeLabel(d.delivery_type);
 
-      {/* Dispute modal */}
-      {showDispute && (
-        <div className="fixed inset-0 z-20 flex items-center justify-center bg-black/30 px-4">
-          <div className="max-w-md w-full rounded-2xl bg-white shadow-lg border border-slate-200 px-4 py-4 space-y-3">
-            <h3 className="text-sm font-semibold text-slate-900">Маргаан үүсгэх (driver)</h3>
-            <p className="text-xs text-slate-600">Товч, тодорхой шалтгаанаа бичнэ үү.</p>
+              const from = shorten(d.from_address, 48);
+              const to = shorten(d.to_address, 48);
+              const what = shorten(d.note, 80);
 
-            <textarea
-              value={disputeReason}
-              onChange={(e) => setDisputeReason(e.target.value)}
-              rows={4}
-              className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-rose-500 focus:border-rose-500"
-              placeholder="Юу болсон талаар…"
-            />
+              const hasMyBid = !!myBids[d.id];
+              const isMine = user ? d.chosen_driver_id === user.id : false;
 
-            <div className="flex items-center justify-end gap-2 pt-1">
-              <button
-                type="button"
-                onClick={() => {
-                  setShowDispute(false);
-                  setDisputeDeliveryId(null);
-                  setDisputeReason("");
-                }}
-                className="text-[11px] px-3 py-1.5 rounded-full border border-slate-200 text-slate-600 hover:bg-slate-50"
-              >
-                Болих
-              </button>
+              return (
+                <div key={d.id} className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex items-center gap-2">
+                      <span className="text-lg">{t.icon}</span>
+                      <span className="text-sm font-semibold text-slate-900">{t.label}</span>
+                      <span className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${b.cls}`}>
+                        {b.text}
+                      </span>
+                      {isMine && d.status !== "OPEN" && (
+                        <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-semibold text-slate-700">
+                          Танд
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-xs text-slate-500">{fmtDT(d.created_at)}</div>
+                  </div>
 
-              <button
-                type="button"
-                onClick={() => void submitDispute()}
-                className="text-[11px] px-3 py-1.5 rounded-full bg-rose-600 text-white hover:bg-rose-700"
-              >
-                Маргаан нээх
-              </button>
-            </div>
+                  <div className="mt-4 grid gap-3 md:grid-cols-3">
+                    <Pill label="Хаанаас" value={from} accent="emerald" />
+                    <Pill label="Хаашаа" value={to} accent="rose" />
+                    <Pill label="Юу хүргэх" value={what} accent="sky" />
+                  </div>
+
+                  <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900">
+                        {fmtPrice(d.price_mnt)}
+                      </span>
+                    </div>
+
+                    <div className="flex flex-wrap gap-2">
+                      {/* OPEN tab: request */}
+                      {activeTab === "OPEN" && d.status === "OPEN" && !hasMyBid && (
+                        <button
+                          onClick={() => placeBid(d.id)}
+                          disabled={!!actLoading[d.id]}
+                          className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
+                        >
+                          {actLoading[d.id] ? "Илгээж байна…" : "Авах хүсэлт"}
+                        </button>
+                      )}
+
+                      {/* REQUESTS tab: cancel */}
+                      {activeTab === "REQUESTS" && d.status === "OPEN" && hasMyBid && (
+                        <button
+                          onClick={() => cancelBid(d.id)}
+                          disabled={!!actLoading[d.id]}
+                          className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:border-slate-300 disabled:opacity-60"
+                        >
+                          {actLoading[d.id] ? "Цуцалж байна…" : "Хүсэлт цуцлах"}
+                        </button>
+                      )}
+
+                      {/* DELIVERED quick */}
+                      {activeTab === "DELIVERED" &&
+                        d.status === "DELIVERED" &&
+                        isMine &&
+                        !d.driver_confirmed_payment && (
+                          <button
+                            onClick={() => quickConfirmPayment(d.id)}
+                            disabled={!!actLoading[d.id]}
+                            className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
+                          >
+                            {actLoading[d.id] ? "Баталж байна…" : "Төлбөр авсан"}
+                          </button>
+                        )}
+
+                      {/* CLOSED: hide */}
+                      {activeTab === "CLOSED" &&
+                        (d.status === "CLOSED" || d.status === "CANCELLED") &&
+                        isMine && (
+                          <button
+                            onClick={() => hideClosedForDriver(d.id)}
+                            disabled={!!actLoading[d.id]}
+                            className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:border-slate-300 disabled:opacity-60"
+                          >
+                            {actLoading[d.id] ? "Устгаж байна…" : "Хаагдсанаас устгах"}
+                          </button>
+                        )}
+
+                      <button
+                        onClick={() => router.push(`/driver/delivery/${d.id}?tab=${activeTab}`)}
+                        className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-900 hover:border-slate-300"
+                      >
+                        Дэлгэрэнгүй
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
           </div>
+        )}
+
+        <div className="mt-10 flex items-center justify-between gap-3 text-xs text-slate-500">
+          <span>INCOME · Driver</span>
+          <button
+            onClick={() => {
+              try {
+                localStorage.removeItem("incomeUser");
+              } catch {}
+              router.push("/");
+            }}
+            className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:border-slate-300"
+          >
+            Гарах
+          </button>
         </div>
-      )}
+      </div>
     </div>
   );
 }

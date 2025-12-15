@@ -1,17 +1,11 @@
 "use client";
 
 /* ===========================
- * app/seller/page.tsx (FINAL)
+ * app/seller/page.tsx (FINAL v2)
  *
- * ✅ Tab: SELLER_TABS (deliveryLogic.ts-тэй таарна)
- * ✅ OPEN дээр: driver_bids тоог карт дээр харуулна
- * ✅ ASSIGNED дээр: карт дээр "Хүргэлт гарсан" (ASSIGNED -> ON_ROUTE) + /seller?tab=ON_ROUTE
- * ✅ CLOSED дээр: CANCELLED хүргэлтүүдийг "Хаагдсанаас устгах" (seller_hidden=true)
- * ✅ Бүх таб дээр: карт дээр quick action + "Дэлгэрэнгүй" товч байна
- *
- * NOTE:
- * - CANCELLED нь CLOSED таб руу орно (deliveryLogic mapping)
- * - Устгах нь физик delete биш, seller_hidden=true (RLS safe)
+ * ✅ 7 сайжруулалтын дагуу таб/логик хэвээр
+ * ✅ OPEN картын UI: Хаанаас → Хаашаа → Юу (тус тусдаа)
+ * ✅ "Хүргэлт нэмэх" товчийг буцааж оруулсан
  * =========================== */
 
 import { useEffect, useMemo, useState } from "react";
@@ -66,7 +60,7 @@ function fmtDT(iso: string | null | undefined) {
   try {
     return new Date(iso).toLocaleString("mn-MN", { hour12: false });
   } catch {
-    return iso;
+    return String(iso);
   }
 }
 
@@ -111,6 +105,40 @@ function badge(status: DeliveryStatus) {
     default:
       return { text: status, cls: "bg-slate-50 text-slate-700 border-slate-200" };
   }
+}
+
+function filterByTab(tab: SellerTabId, items: DeliveryRow[]) {
+  return items.filter((d) => getSellerTabForStatus(d.status) === tab);
+}
+
+function Pill({
+  label,
+  value,
+  accent = "slate",
+}: {
+  label: string;
+  value: string;
+  accent?: "emerald" | "rose" | "sky" | "slate" | "amber" | "indigo";
+}) {
+  const acc =
+    accent === "emerald"
+      ? "bg-emerald-50 border-emerald-100 text-emerald-800"
+      : accent === "rose"
+      ? "bg-rose-50 border-rose-100 text-rose-800"
+      : accent === "sky"
+      ? "bg-sky-50 border-sky-100 text-sky-800"
+      : accent === "amber"
+      ? "bg-amber-50 border-amber-100 text-amber-800"
+      : accent === "indigo"
+      ? "bg-indigo-50 border-indigo-100 text-indigo-800"
+      : "bg-slate-50 border-slate-200 text-slate-800";
+
+  return (
+    <div className={`rounded-xl border px-3 py-2 ${acc}`}>
+      <div className="text-[11px] opacity-70">{label}</div>
+      <div className="text-sm font-semibold leading-snug">{value}</div>
+    </div>
+  );
 }
 
 export default function SellerDashboardPage() {
@@ -214,7 +242,7 @@ export default function SellerDashboardPage() {
         from_address: d.from_address,
         to_address: d.to_address,
         note: d.note,
-        status: d.status as DeliveryStatus,
+        status: d.status,
         created_at: d.created_at,
         price_mnt: d.price_mnt,
         delivery_type: d.delivery_type,
@@ -222,290 +250,272 @@ export default function SellerDashboardPage() {
         seller_marked_paid: !!d.seller_marked_paid,
         driver_confirmed_payment: !!d.driver_confirmed_payment,
         closed_at: d.closed_at,
-        dispute_reason: d.dispute_reason ?? null,
-        dispute_opened_at: d.dispute_opened_at ?? null,
+        dispute_reason: d.dispute_reason,
+        dispute_opened_at: d.dispute_opened_at,
         seller_hidden: !!d.seller_hidden,
       }));
 
-      // OPEN дээр bid_count гаргахын тулд driver_bids count татна
+      // OPEN дээр bid_count нэмнэ (driver_bids)
       const openIds = base.filter((x) => x.status === "OPEN").map((x) => x.id);
 
-      if (openIds.length > 0) {
+      let bidMap: Record<string, number> = {};
+      if (openIds.length) {
         const { data: bids, error: e2 } = await supabase
           .from("driver_bids")
           .select("delivery_id")
           .in("delivery_id", openIds);
 
-        if (!e2) {
-          const cnt = new Map<string, number>();
-          for (const b of bids || []) {
-            const did = String((b as any).delivery_id);
-            cnt.set(did, (cnt.get(did) || 0) + 1);
-          }
-          for (const d of base) {
-            if (d.status === "OPEN") d.bid_count = cnt.get(d.id) || 0;
-          }
+        if (!e2 && bids) {
+          bidMap = bids.reduce((acc: any, r: any) => {
+            const k = r.delivery_id as string;
+            acc[k] = (acc[k] || 0) + 1;
+            return acc;
+          }, {});
         }
       }
 
-      setItems(base);
-    } catch (e) {
+      const merged = base.map((d) => ({
+        ...d,
+        bid_count: d.status === "OPEN" ? bidMap[d.id] || 0 : undefined,
+      }));
+
+      setItems(merged);
+      setMsg(null);
+    } catch (e: any) {
       console.error(e);
-      setItems([]);
-      setError("Жагсаалт татахад алдаа гарлаа.");
+      setError("Өгөгдөл татахад алдаа гарлаа. Дахин оролдоно уу.");
     } finally {
       setLoading(false);
     }
   }
 
-  function setLoadingFor(id: string, v: boolean) {
-    setActLoading((p) => ({ ...p, [id]: v }));
-  }
-
-  // ASSIGNED -> ON_ROUTE (seller quick)
-  async function markOnRoute(deliveryId: string) {
+  async function markOnRouteFromAssigned(deliveryId: string) {
     if (!user) return;
-    const d = items.find((x) => x.id === deliveryId);
-    if (!d) return;
-
-    if (!(d.status === "ASSIGNED" && !!d.chosen_driver_id)) {
-      setError("Зөвхөн 'Жолооч сонгосон' үед 'Хүргэлт гарсан' дарна.");
-      return;
-    }
-
-    setLoadingFor(deliveryId, true);
-    setError(null);
+    setActLoading((p) => ({ ...p, [deliveryId]: true }));
     setMsg(null);
+    setError(null);
 
     try {
-      const { error } = await supabase
+      const { error: e1 } = await supabase
         .from("deliveries")
         .update({ status: "ON_ROUTE" })
         .eq("id", deliveryId)
-        .eq("seller_id", user.id)
-        .eq("status", "ASSIGNED");
+        .eq("seller_id", user.id);
 
-      if (error) {
-        console.error(error);
-        setError("Замд гарсан гэж тэмдэглэхэд алдаа гарлаа.");
-        return;
-      }
+      if (e1) throw e1;
 
-      setItems((prev) => prev.map((x) => (x.id === deliveryId ? { ...x, status: "ON_ROUTE" } : x)));
-      setMsg("Замд гарсан гэж тэмдэглэлээ.");
-      setTimeout(() => changeTab("ON_ROUTE"), 250);
+      await fetchAll(user.id);
+      changeTab("ON_ROUTE");
+      setMsg("Хүргэлт замд гарлаа.");
+    } catch (e: any) {
+      console.error(e);
+      setError("Шинэчлэхэд алдаа гарлаа. Дахин оролдоно уу.");
     } finally {
-      setLoadingFor(deliveryId, false);
+      setActLoading((p) => ({ ...p, [deliveryId]: false }));
     }
   }
 
-  // CANCELLED -> seller_hidden=true (delete from CLOSED)
-  async function hideCancelled(deliveryId: string) {
+  async function hideFromClosed(deliveryId: string) {
     if (!user) return;
-    const d = items.find((x) => x.id === deliveryId);
-    if (!d) return;
-
-    if (d.status !== "CANCELLED") {
-      setError("Зөвхөн 'Цуцалсан' хүргэлтийг л хаагдсанаас устгана.");
-      return;
-    }
-
-    setLoadingFor(deliveryId, true);
-    setError(null);
+    setActLoading((p) => ({ ...p, [deliveryId]: true }));
     setMsg(null);
+    setError(null);
 
     try {
-      const { error } = await supabase
+      const { error: e1 } = await supabase
         .from("deliveries")
         .update({ seller_hidden: true })
         .eq("id", deliveryId)
-        .eq("seller_id", user.id)
-        .eq("status", "CANCELLED");
+        .eq("seller_id", user.id);
 
-      if (error) {
-        console.error(error);
-        setError("Устгах (нуух) үед алдаа гарлаа.");
-        return;
-      }
+      if (e1) throw e1;
 
-      setItems((prev) => prev.filter((x) => x.id !== deliveryId));
-      setMsg("Цуцалсан хүргэлтийг хаагдсанаас устгалаа.");
+      await fetchAll(user.id);
+      setMsg("Хаагдсанаас устгалаа.");
+    } catch (e: any) {
+      console.error(e);
+      setError("Устгахад алдаа гарлаа. Дахин оролдоно уу.");
     } finally {
-      setLoadingFor(deliveryId, false);
+      setActLoading((p) => ({ ...p, [deliveryId]: false }));
     }
   }
 
-  const filtered = useMemo(() => {
-    return items.filter((d) => getSellerTabForStatus(d.status) === activeTab);
-  }, [items, activeTab]);
-
-  const tabCounts = useMemo(() => {
-    const out: Record<SellerTabId, number> = {
-      OPEN: 0,
-      ASSIGNED: 0,
-      ON_ROUTE: 0,
-      DELIVERED: 0,
-      DISPUTE: 0,
-      CLOSED: 0,
-    };
-    for (const d of items) out[getSellerTabForStatus(d.status)]++;
-    return out;
-  }, [items]);
-
-  function logout() {
-    localStorage.removeItem("incomeUser");
-    router.replace("/");
-  }
-
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
-        <div className="text-sm text-slate-500">Ачаалж байна…</div>
-      </div>
-    );
-  }
-
-  if (!user) return null;
+  const filtered = useMemo(() => filterByTab(activeTab, items), [activeTab, items]);
 
   return (
     <div className="min-h-screen bg-slate-50">
-      <header className="border-b border-slate-200 bg-white">
-        <div className="max-w-3xl mx-auto px-4 py-4 flex items-center justify-between">
-          <h1 className="text-sm font-semibold">Худалдагчийн самбар</h1>
+      <div className="mx-auto max-w-5xl px-4 pb-12 pt-6">
+        {/* Header */}
+        <div className="mb-4 flex items-start justify-between gap-3">
+          <div>
+            <div className="text-xs text-slate-500">Худалдагч</div>
+          </div>
+
           <button
-            onClick={logout}
-            className="text-[11px] px-4 py-2 rounded-full border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+            onClick={() => router.push("/seller/new-delivery")}
+            className="shrink-0 rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-slate-800 active:scale-[0.99]"
           >
-            Гарах
+            ＋ Хүргэлт нэмэх
           </button>
         </div>
-      </header>
 
-      <main className="max-w-3xl mx-auto px-4 py-5 space-y-4">
-        {msg && (
-          <div className="rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-2 text-xs">
-            {msg}
-          </div>
-        )}
+        {/* Tabs */}
+        <div className="mb-5 flex flex-wrap gap-2">
+          {SELLER_TABS.map((t) => {
+            const isActive = t.id === activeTab;
+            return (
+              <button
+                key={t.id}
+                onClick={() => changeTab(t.id)}
+                className={`rounded-xl border px-3 py-2 text-sm font-semibold transition ${
+                  isActive
+                    ? "border-slate-900 bg-white text-slate-900 shadow-sm"
+                    : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"
+                }`}
+              >
+                {t.label}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Alerts */}
         {error && (
-          <div className="rounded-2xl border border-rose-100 bg-rose-50 px-4 py-2 text-xs">
+          <div className="mb-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">
             {error}
           </div>
         )}
+        {msg && (
+          <div className="mb-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+            {msg}
+          </div>
+        )}
 
-        {/* Tabs */}
-        <div className="rounded-2xl border border-slate-200 bg-white px-2 py-2 flex flex-wrap gap-1">
-          {SELLER_TABS.map((tab) => (
-            <button
-              key={tab.id}
-              onClick={() => changeTab(tab.id)}
-              className={
-                "text-[11px] px-3 py-1.5 rounded-full border " +
-                (tab.id === activeTab
-                  ? "bg-emerald-600 text-white border-emerald-600"
-                  : "bg-white text-slate-600 border-slate-200")
-              }
-            >
-              {tab.label}
-              {tabCounts[tab.id] > 0 && <span className="ml-1">({tabCounts[tab.id]})</span>}
-            </button>
-          ))}
-        </div>
-
-        {/* List */}
-        {filtered.length === 0 ? (
-          <div className="rounded-2xl border border-slate-200 bg-white px-4 py-4 text-sm text-slate-500">
-            Энэ таб дээр хүргэлт алга байна.
+        {/* Body */}
+        {loading ? (
+          <div className="rounded-2xl border border-slate-200 bg-white p-6 text-slate-600">
+            Ачаалж байна…
+          </div>
+        ) : filtered.length === 0 ? (
+          <div className="rounded-2xl border border-slate-200 bg-white p-6 text-slate-600">
+            Энэ таб дээр одоогоор хүргэлт алга.
           </div>
         ) : (
-          <section className="space-y-3">
+          <div className="grid gap-4">
             {filtered.map((d) => {
-              const t = typeLabel(d.delivery_type);
               const b = badge(d.status);
+              const t = typeLabel(d.delivery_type);
 
-              const canQuickOnRoute = d.status === "ASSIGNED" && !!d.chosen_driver_id;
-              const canDeleteCancelled = d.status === "CANCELLED" && activeTab === "CLOSED";
+              const from = shorten(d.from_address, 48);
+              const to = shorten(d.to_address, 48);
+              const what = shorten(d.note, 80);
+
+              const bidCount = d.status === "OPEN" ? Number(d.bid_count || 0) : 0;
 
               return (
                 <div
                   key={d.id}
-                  className="rounded-2xl border border-slate-200 bg-white px-4 py-4 hover:bg-slate-50 transition"
+                  className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm"
                 >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs">{t.icon}</span>
-                        <div className="text-sm font-semibold text-slate-900 truncate">
-                          {t.label} #{d.id.slice(0, 6)}
-                        </div>
-                        <span className={`text-[10px] px-2 py-1 rounded-full border ${b.cls}`}>
-                          {b.text}
+                  {/* Top row */}
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex items-center gap-2">
+                      <span className="text-lg">{t.icon}</span>
+                      <span className="text-sm font-semibold text-slate-900">{t.label}</span>
+                      <span className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${b.cls}`}>
+                        {b.text}
+                      </span>
+
+                      {d.status === "OPEN" && (
+                        <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-semibold text-slate-700">
+                          Санал: {bidCount}
                         </span>
-                      </div>
-
-                      <div className="mt-2 space-y-1">
-                        <div className="text-[11px] text-slate-500">Үүсгэсэн: {fmtDT(d.created_at)}</div>
-
-                        <div className="text-xs text-slate-700">
-                          <span className="font-semibold text-slate-600">Авах:</span>{" "}
-                          {shorten(d.from_address, 70)}
-                        </div>
-                        <div className="text-xs text-slate-700">
-                          <span className="font-semibold text-slate-600">Хүргэх:</span>{" "}
-                          {shorten(d.to_address, 70)}
-                        </div>
-
-                        {d.status === "OPEN" && (
-                          <div className="text-[11px] text-slate-600">
-                            Жолоочийн санал:{" "}
-                            <span className="font-semibold text-slate-900">{d.bid_count || 0}</span>
-                          </div>
-                        )}
-                      </div>
+                      )}
                     </div>
 
-                    <div className="text-right shrink-0">
-                      <div className="text-[11px] text-slate-500">Үнэ</div>
-                      <div className="text-sm font-semibold text-slate-900">{fmtPrice(d.price_mnt)}</div>
-                    </div>
+                    <div className="text-xs text-slate-500">{fmtDT(d.created_at)}</div>
                   </div>
 
-                  {/* ✅ QUICK BUTTONS ON CARD */}
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {canQuickOnRoute && (
-                      <button
-                        onClick={() => void markOnRoute(d.id)}
-                        disabled={!!actLoading[d.id]}
-                        className="text-[11px] px-4 py-2 rounded-full bg-indigo-600 text-white font-semibold disabled:opacity-60"
-                      >
-                        {actLoading[d.id] ? "Тэмдэглэж байна…" : "Хүргэлт гарсан"}
-                      </button>
-                    )}
+                  {/* Main tiles (OPEN/UI clarity) */}
+                  <div className="mt-4 grid gap-3 md:grid-cols-3">
+                    <Pill label="Хаанаас" value={from} accent="emerald" />
+                    <Pill label="Хаашаа" value={to} accent="rose" />
+                    <Pill label="Юу хүргэх" value={what} accent="sky" />
+                  </div>
 
-                    {canDeleteCancelled && (
-                      <button
-                        onClick={() => void hideCancelled(d.id)}
-                        disabled={!!actLoading[d.id]}
-                        className="text-[11px] px-4 py-2 rounded-full bg-slate-900 text-white font-semibold disabled:opacity-60"
-                        title="seller_hidden=true"
-                      >
-                        {actLoading[d.id] ? "Устгаж байна…" : "Хаагдсанаас устгах"}
-                      </button>
-                    )}
+                  {/* Bottom row */}
+                  <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900">
+                        {fmtPrice(d.price_mnt)}
+                      </span>
 
-                    <button
-                      onClick={() => router.push(`/seller/delivery/${d.id}?tab=${activeTab}`)}
-                      className="text-[11px] px-4 py-2 rounded-full border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
-                    >
-                      Дэлгэрэнгүй
-                    </button>
+                      {d.status === "DISPUTE" && d.dispute_opened_at && (
+                        <span className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-800">
+                          Маргаан нээсэн: {fmtDT(d.dispute_opened_at)}
+                        </span>
+                      )}
+
+                      {d.status === "CLOSED" && d.closed_at && (
+                        <span className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700">
+                          Хаагдсан: {fmtDT(d.closed_at)}
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="flex flex-wrap gap-2">
+                      {/* ASSIGNED дээр "Хүргэлт гарсан" */}
+                      {activeTab === "ASSIGNED" && d.status === "ASSIGNED" && (
+                        <button
+                          onClick={() => markOnRouteFromAssigned(d.id)}
+                          disabled={!!actLoading[d.id]}
+                          className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
+                        >
+                          {actLoading[d.id] ? "Түр хүлээнэ үү…" : "Хүргэлт гарсан"}
+                        </button>
+                      )}
+
+                      {/* CLOSED дээр устгах (seller_hidden=true) */}
+                      {activeTab === "CLOSED" && (d.status === "CLOSED" || d.status === "CANCELLED") && (
+                        <button
+                          onClick={() => hideFromClosed(d.id)}
+                          disabled={!!actLoading[d.id]}
+                          className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:border-slate-300 disabled:opacity-60"
+                        >
+                          {actLoading[d.id] ? "Устгаж байна…" : "Хаагдсанаас устгах"}
+                        </button>
+                      )}
+
+                      <button
+                        onClick={() => router.push(`/seller/delivery/${d.id}?tab=${activeTab}`)}
+                        className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-900 hover:border-slate-300"
+                      >
+                        Дэлгэрэнгүй
+                      </button>
+                    </div>
                   </div>
                 </div>
               );
             })}
-          </section>
+          </div>
         )}
-      </main>
+
+        {/* Footer quick */}
+        <div className="mt-10 flex items-center justify-between gap-3 text-xs text-slate-500">
+          <span>INCOME · Seller</span>
+          <button
+            onClick={() => {
+              try {
+                localStorage.removeItem("incomeUser");
+              } catch {}
+              router.push("/");
+            }}
+            className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:border-slate-300"
+          >
+            Гарах
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
