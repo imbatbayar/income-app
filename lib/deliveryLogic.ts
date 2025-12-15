@@ -1,4 +1,4 @@
-// ===================== lib/deliveryLogic.ts =====================
+// ===================== lib/deliveryLogic.ts (FINAL) =====================
 // Хүргэлтийн статус, табуудын төвлөрсөн логик
 // - PAID статус / таб ашиглахгүй
 // - Төлбөрийн тохироо: DELIVERED дээр seller_marked_paid + driver_confirmed_payment хоёулаа true бол CLOSED болно.
@@ -132,7 +132,7 @@ export function shouldCloseDelivery(input: {
 }
 
 // ---------- Маргаан нээх боломж ----------
-// ✅ Жолооч тал: ON_ROUTE эсвэл DELIVERED үед (танай Driver detail логиктой тааруулсан)
+// ✅ Жолооч тал: ON_ROUTE эсвэл DELIVERED үед
 export function canOpenDisputeForDriver(status: DeliveryStatus): boolean {
   return status === "ON_ROUTE" || status === "DELIVERED";
 }

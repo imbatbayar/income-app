@@ -1,17 +1,28 @@
 "use client";
 
 /* ===========================
- * app/seller/page.tsx
- * CLEAN:
- * - OPEN дээр driver_bids count харуулна
- * - Tab дараалал lib/deliveryLogic.ts-тэй таарсан
- * - ✅ Quick action: ASSIGNED дээр "Хүргэлтэд гарсан" товч (ON_ROUTE + redirect)
+ * app/seller/page.tsx (FINAL)
+ *
+ * ✅ Tab: SELLER_TABS (deliveryLogic.ts-тэй таарна)
+ * ✅ OPEN дээр: driver_bids тоог карт дээр харуулна
+ * ✅ ASSIGNED дээр: карт дээр "Хүргэлт гарсан" (ASSIGNED -> ON_ROUTE) + /seller?tab=ON_ROUTE
+ * ✅ CLOSED дээр: CANCELLED хүргэлтүүдийг "Хаагдсанаас устгах" (seller_hidden=true)
+ * ✅ Бүх таб дээр: карт дээр quick action + "Дэлгэрэнгүй" товч байна
+ *
+ * NOTE:
+ * - CANCELLED нь CLOSED таб руу орно (deliveryLogic mapping)
+ * - Устгах нь физик delete биш, seller_hidden=true (RLS safe)
  * =========================== */
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
-import { DeliveryStatus, SELLER_TABS, SellerTabId } from "@/lib/deliveryLogic";
+import {
+  DeliveryStatus,
+  SELLER_TABS,
+  SellerTabId,
+  getSellerTabForStatus,
+} from "@/lib/deliveryLogic";
 
 type Role = "seller" | "driver";
 
@@ -33,21 +44,40 @@ type DeliveryRow = {
   created_at: string;
   price_mnt: number | null;
   delivery_type: string | null;
-
-  seller_marked_paid: boolean | null;
-  driver_confirmed_payment: boolean | null;
-  closed_at: string | null;
-
-  seller_hidden: boolean | null;
-  bids_count: number;
-
   chosen_driver_id: string | null;
+  seller_marked_paid: boolean;
+  driver_confirmed_payment: boolean;
+  closed_at: string | null;
+  dispute_reason: string | null;
+  dispute_opened_at: string | null;
+  seller_hidden: boolean;
+
+  // UI-only
+  bid_count?: number;
 };
 
-const TAB_IDS: SellerTabId[] = SELLER_TABS.map((t) => t.id);
+function fmtPrice(n: number | null | undefined) {
+  const v = Number(n || 0);
+  return v ? `${v.toLocaleString("mn-MN")}₮` : "Үнэ тохиролцоно";
+}
 
-/* ---------- helpers ---------- */
-function typeLabel(deliveryType: string | null) {
+function fmtDT(iso: string | null | undefined) {
+  if (!iso) return "";
+  try {
+    return new Date(iso).toLocaleString("mn-MN", { hour12: false });
+  } catch {
+    return iso;
+  }
+}
+
+function shorten(s: string | null, max = 70) {
+  if (!s) return "—";
+  const t = s.trim();
+  if (t.length <= max) return t;
+  return t.slice(0, max).replace(/\s+$/, "") + "…";
+}
+
+function typeLabel(deliveryType: string | null): { icon: string; label: string } {
   switch (deliveryType) {
     case "apartment":
       return { icon: "🏙", label: "Байр" };
@@ -62,153 +92,67 @@ function typeLabel(deliveryType: string | null) {
   }
 }
 
-function statusBadge(status: DeliveryStatus) {
+function badge(status: DeliveryStatus) {
   switch (status) {
     case "OPEN":
-      return {
-        text: "Нээлттэй",
-        className: "bg-emerald-50 text-emerald-700 border-emerald-100",
-      };
+      return { text: "Нээлттэй", cls: "bg-emerald-50 text-emerald-700 border-emerald-100" };
     case "ASSIGNED":
-      return {
-        text: "Жолооч сонгосон",
-        className: "bg-sky-50 text-sky-700 border-sky-100",
-      };
+      return { text: "Жолооч сонгосон", cls: "bg-sky-50 text-sky-700 border-sky-100" };
     case "ON_ROUTE":
-      return {
-        text: "Замд",
-        className: "bg-indigo-50 text-indigo-700 border-indigo-100",
-      };
+      return { text: "Замд", cls: "bg-indigo-50 text-indigo-700 border-indigo-100" };
     case "DELIVERED":
-      return {
-        text: "Хүргэсэн",
-        className: "bg-slate-900 text-white border-slate-900",
-      };
+      return { text: "Хүргэсэн", cls: "bg-amber-50 text-amber-700 border-amber-100" };
     case "DISPUTE":
-      return {
-        text: "Маргаан",
-        className: "bg-rose-50 text-rose-700 border-rose-100",
-      };
+      return { text: "Маргаан", cls: "bg-rose-50 text-rose-700 border-rose-100" };
     case "CLOSED":
-      return {
-        text: "Хаагдсан",
-        className: "bg-emerald-900 text-emerald-50 border-emerald-900",
-      };
+      return { text: "Хаагдсан", cls: "bg-slate-50 text-slate-700 border-slate-200" };
     case "CANCELLED":
-      return {
-        text: "Цуцалсан",
-        className: "bg-rose-50 text-rose-700 border-rose-100",
-      };
+      return { text: "Цуцалсан", cls: "bg-rose-50 text-rose-700 border-rose-100" };
     default:
-      return {
-        text: status,
-        className: "bg-slate-50 text-slate-600 border-slate-100",
-      };
+      return { text: status, cls: "bg-slate-50 text-slate-700 border-slate-200" };
   }
 }
 
-function shorten(s: string | null, max = 110) {
-  if (!s) return "";
-  const t = s.trim();
-  if (t.length <= max) return t;
-  return t.slice(0, max).replace(/\s+$/, "") + "…";
-}
-
-function formatPrice(n: number | null) {
-  if (!n) return "Үнэ тохиролцоно";
-  return n.toLocaleString("mn-MN") + "₮";
-}
-
-function formatDateTime(iso: string) {
-  const d = new Date(iso);
-  return (
-    d.toLocaleDateString("mn-MN", { month: "2-digit", day: "2-digit" }) +
-    " " +
-    d.toLocaleTimeString("mn-MN", { hour: "2-digit", minute: "2-digit" })
-  );
-}
-
-function filterByTab(tab: SellerTabId, items: DeliveryRow[]) {
-  return items.filter((d) => {
-    switch (tab) {
-      case "OPEN":
-        return d.status === "OPEN";
-      case "ASSIGNED":
-        return d.status === "ASSIGNED";
-      case "ON_ROUTE":
-        return d.status === "ON_ROUTE";
-      case "DELIVERED":
-        return d.status === "DELIVERED";
-      case "DISPUTE":
-        return d.status === "DISPUTE";
-      case "CLOSED":
-        return d.status === "CLOSED" || d.status === "CANCELLED";
-      default:
-        return true;
-    }
-  });
-}
-
-/* =========================== */
-
 export default function SellerDashboardPage() {
   const router = useRouter();
-  const searchParams = useSearchParams();
+  const sp = useSearchParams();
 
   const [user, setUser] = useState<IncomeUser | null>(null);
-  const [loadingUser, setLoadingUser] = useState(true);
-
-  const [deliveries, setDeliveries] = useState<DeliveryRow[]>([]);
-  const [loadingList, setLoadingList] = useState(true);
-
   const [activeTab, setActiveTab] = useState<SellerTabId>("OPEN");
-  const [message, setMessage] = useState<string | null>(null);
+
+  const [loading, setLoading] = useState(true);
+  const [items, setItems] = useState<DeliveryRow[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
 
-  // ✅ Quick action loading: deliveryId -> boolean
-  const [quickLoading, setQuickLoading] = useState<Record<string, boolean>>({});
+  const [actLoading, setActLoading] = useState<Record<string, boolean>>({});
 
-  const filtered = useMemo(
-    () => filterByTab(activeTab, deliveries),
-    [activeTab, deliveries]
-  );
-
-  const tabCounts = useMemo(() => {
-    return SELLER_TABS.reduce((acc, t) => {
-      acc[t.id] = filterByTab(t.id, deliveries).length;
-      return acc;
-    }, {} as Record<SellerTabId, number>);
-  }, [deliveries]);
-
-  /* ---------- auth ---------- */
+  // auth
   useEffect(() => {
-    const raw = window.localStorage.getItem("incomeUser");
-    if (!raw) {
+    try {
+      const raw = window.localStorage.getItem("incomeUser");
+      if (!raw) return router.replace("/");
+      const u: IncomeUser = JSON.parse(raw);
+      if (u.role !== "seller") return router.replace("/");
+      setUser(u);
+    } catch {
       router.replace("/");
-      return;
     }
-    const parsed: IncomeUser = JSON.parse(raw);
-    if (parsed.role !== "seller") {
-      router.replace("/");
-      return;
-    }
-    setUser(parsed);
-    setLoadingUser(false);
   }, [router]);
 
-  /* ---------- tab init ---------- */
+  // init tab
   useEffect(() => {
-    const urlTab = searchParams.get("tab");
-    if (urlTab && TAB_IDS.includes(urlTab as SellerTabId)) {
+    const urlTab = sp.get("tab");
+    const valid = SELLER_TABS.some((t) => t.id === (urlTab as any));
+    if (urlTab && valid) {
       setActiveTab(urlTab as SellerTabId);
       localStorage.setItem("sellerActiveTab", urlTab);
       return;
     }
     const stored = localStorage.getItem("sellerActiveTab");
-    if (stored && TAB_IDS.includes(stored as SellerTabId)) {
-      setActiveTab(stored as SellerTabId);
-    }
-  }, [searchParams]);
+    const validStored = SELLER_TABS.some((t) => t.id === (stored as any));
+    if (stored && validStored) setActiveTab(stored as SellerTabId);
+  }, [sp]);
 
   function changeTab(tab: SellerTabId) {
     setActiveTab(tab);
@@ -216,18 +160,27 @@ export default function SellerDashboardPage() {
     router.push(`/seller?tab=${tab}`);
   }
 
-  /* ---------- fetch ---------- */
+  // fetch
   useEffect(() => {
     if (!user) return;
-    void fetchDeliveries(user.id);
-  }, [user]);
+    void fetchAll(user.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id]);
 
-  async function fetchDeliveries(sellerId: string) {
+  useEffect(() => {
+    if (!user) return;
+    const onFocus = () => void fetchAll(user.id);
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id]);
+
+  async function fetchAll(sellerId: string) {
+    setLoading(true);
+    setError(null);
+
     try {
-      setLoadingList(true);
-      setError(null);
-
-      const { data, error } = await supabase
+      const { data, error: e1 } = await supabase
         .from("deliveries")
         .select(
           `
@@ -240,57 +193,89 @@ export default function SellerDashboardPage() {
           created_at,
           price_mnt,
           delivery_type,
+          chosen_driver_id,
           seller_marked_paid,
           driver_confirmed_payment,
           closed_at,
-          seller_hidden,
-          chosen_driver_id,
-          driver_bids(count)
+          dispute_reason,
+          dispute_opened_at,
+          seller_hidden
         `
         )
         .eq("seller_id", sellerId)
         .eq("seller_hidden", false)
         .order("created_at", { ascending: false });
 
-      if (error) throw error;
+      if (e1) throw e1;
 
-      const rows: DeliveryRow[] = (data || []).map((d: any) => ({
+      const base: DeliveryRow[] = (data || []).map((d: any) => ({
         id: d.id,
         seller_id: d.seller_id,
         from_address: d.from_address,
         to_address: d.to_address,
         note: d.note,
-        status: d.status,
+        status: d.status as DeliveryStatus,
         created_at: d.created_at,
         price_mnt: d.price_mnt,
         delivery_type: d.delivery_type,
+        chosen_driver_id: d.chosen_driver_id,
         seller_marked_paid: !!d.seller_marked_paid,
         driver_confirmed_payment: !!d.driver_confirmed_payment,
         closed_at: d.closed_at,
+        dispute_reason: d.dispute_reason ?? null,
+        dispute_opened_at: d.dispute_opened_at ?? null,
         seller_hidden: !!d.seller_hidden,
-        chosen_driver_id: d.chosen_driver_id ?? null,
-        bids_count:
-          Array.isArray(d.driver_bids) && d.driver_bids[0]?.count
-            ? Number(d.driver_bids[0].count)
-            : 0,
       }));
 
-      setDeliveries(rows);
-    } catch {
-      setError("Хүргэлтийн жагсаалт татахад алдаа гарлаа.");
-      setDeliveries([]);
+      // OPEN дээр bid_count гаргахын тулд driver_bids count татна
+      const openIds = base.filter((x) => x.status === "OPEN").map((x) => x.id);
+
+      if (openIds.length > 0) {
+        const { data: bids, error: e2 } = await supabase
+          .from("driver_bids")
+          .select("delivery_id")
+          .in("delivery_id", openIds);
+
+        if (!e2) {
+          const cnt = new Map<string, number>();
+          for (const b of bids || []) {
+            const did = String((b as any).delivery_id);
+            cnt.set(did, (cnt.get(did) || 0) + 1);
+          }
+          for (const d of base) {
+            if (d.status === "OPEN") d.bid_count = cnt.get(d.id) || 0;
+          }
+        }
+      }
+
+      setItems(base);
+    } catch (e) {
+      console.error(e);
+      setItems([]);
+      setError("Жагсаалт татахад алдаа гарлаа.");
     } finally {
-      setLoadingList(false);
+      setLoading(false);
     }
   }
 
-  /* ✅ QUICK: ASSIGNED -> ON_ROUTE + redirect */
-  async function handleQuickMarkOnRoute(deliveryId: string) {
-    if (!user) return;
+  function setLoadingFor(id: string, v: boolean) {
+    setActLoading((p) => ({ ...p, [id]: v }));
+  }
 
-    setQuickLoading((prev) => ({ ...prev, [deliveryId]: true }));
+  // ASSIGNED -> ON_ROUTE (seller quick)
+  async function markOnRoute(deliveryId: string) {
+    if (!user) return;
+    const d = items.find((x) => x.id === deliveryId);
+    if (!d) return;
+
+    if (!(d.status === "ASSIGNED" && !!d.chosen_driver_id)) {
+      setError("Зөвхөн 'Жолооч сонгосон' үед 'Хүргэлт гарсан' дарна.");
+      return;
+    }
+
+    setLoadingFor(deliveryId, true);
     setError(null);
-    setMessage(null);
+    setMsg(null);
 
     try {
       const { error } = await supabase
@@ -298,29 +283,81 @@ export default function SellerDashboardPage() {
         .update({ status: "ON_ROUTE" })
         .eq("id", deliveryId)
         .eq("seller_id", user.id)
-        .eq("status", "ASSIGNED"); // хамгаалалт
+        .eq("status", "ASSIGNED");
 
       if (error) {
         console.error(error);
-        setError("“Хүргэлтэд гарсан” тэмдэглэхэд алдаа гарлаа.");
+        setError("Замд гарсан гэж тэмдэглэхэд алдаа гарлаа.");
         return;
       }
 
-      // UI дээр локал update
-      setDeliveries((prev) =>
-        prev.map((d) => (d.id === deliveryId ? { ...d, status: "ON_ROUTE" } : d))
-      );
-
-      // ✅ ШУУД ON_ROUTE tab руу
-      localStorage.setItem("sellerActiveTab", "ON_ROUTE");
-      router.push("/seller?tab=ON_ROUTE");
+      setItems((prev) => prev.map((x) => (x.id === deliveryId ? { ...x, status: "ON_ROUTE" } : x)));
+      setMsg("Замд гарсан гэж тэмдэглэлээ.");
+      setTimeout(() => changeTab("ON_ROUTE"), 250);
     } finally {
-      setQuickLoading((prev) => ({ ...prev, [deliveryId]: false }));
+      setLoadingFor(deliveryId, false);
     }
   }
 
-  /* ---------- render ---------- */
-  if (loadingUser || loadingList) {
+  // CANCELLED -> seller_hidden=true (delete from CLOSED)
+  async function hideCancelled(deliveryId: string) {
+    if (!user) return;
+    const d = items.find((x) => x.id === deliveryId);
+    if (!d) return;
+
+    if (d.status !== "CANCELLED") {
+      setError("Зөвхөн 'Цуцалсан' хүргэлтийг л хаагдсанаас устгана.");
+      return;
+    }
+
+    setLoadingFor(deliveryId, true);
+    setError(null);
+    setMsg(null);
+
+    try {
+      const { error } = await supabase
+        .from("deliveries")
+        .update({ seller_hidden: true })
+        .eq("id", deliveryId)
+        .eq("seller_id", user.id)
+        .eq("status", "CANCELLED");
+
+      if (error) {
+        console.error(error);
+        setError("Устгах (нуух) үед алдаа гарлаа.");
+        return;
+      }
+
+      setItems((prev) => prev.filter((x) => x.id !== deliveryId));
+      setMsg("Цуцалсан хүргэлтийг хаагдсанаас устгалаа.");
+    } finally {
+      setLoadingFor(deliveryId, false);
+    }
+  }
+
+  const filtered = useMemo(() => {
+    return items.filter((d) => getSellerTabForStatus(d.status) === activeTab);
+  }, [items, activeTab]);
+
+  const tabCounts = useMemo(() => {
+    const out: Record<SellerTabId, number> = {
+      OPEN: 0,
+      ASSIGNED: 0,
+      ON_ROUTE: 0,
+      DELIVERED: 0,
+      DISPUTE: 0,
+      CLOSED: 0,
+    };
+    for (const d of items) out[getSellerTabForStatus(d.status)]++;
+    return out;
+  }, [items]);
+
+  function logout() {
+    localStorage.removeItem("incomeUser");
+    router.replace("/");
+  }
+
+  if (loading) {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center">
         <div className="text-sm text-slate-500">Ачаалж байна…</div>
@@ -328,34 +365,26 @@ export default function SellerDashboardPage() {
     );
   }
 
-  if (!user) {
-    return (
-      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
-        <div className="text-sm text-slate-500">Хэрэглэгч олдсонгүй.</div>
-      </div>
-    );
-  }
+  if (!user) return null;
 
   return (
     <div className="min-h-screen bg-slate-50">
       <header className="border-b border-slate-200 bg-white">
         <div className="max-w-3xl mx-auto px-4 py-4 flex items-center justify-between">
           <h1 className="text-sm font-semibold">Худалдагчийн самбар</h1>
-          <div className="flex gap-2">
-            <button
-              onClick={() => router.push("/seller/new-delivery")}
-              className="text-[11px] px-5 py-2 rounded-full bg-emerald-600 text-white font-semibold"
-            >
-              + Хүргэлт нэмэх
-            </button>
-          </div>
+          <button
+            onClick={logout}
+            className="text-[11px] px-4 py-2 rounded-full border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+          >
+            Гарах
+          </button>
         </div>
       </header>
 
       <main className="max-w-3xl mx-auto px-4 py-5 space-y-4">
-        {message && (
+        {msg && (
           <div className="rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-2 text-xs">
-            {message}
+            {msg}
           </div>
         )}
         {error && (
@@ -364,6 +393,7 @@ export default function SellerDashboardPage() {
           </div>
         )}
 
+        {/* Tabs */}
         <div className="rounded-2xl border border-slate-200 bg-white px-2 py-2 flex flex-wrap gap-1">
           {SELLER_TABS.map((tab) => (
             <button
@@ -377,106 +407,104 @@ export default function SellerDashboardPage() {
               }
             >
               {tab.label}
-              {tabCounts[tab.id] > 0 && (
-                <span className="ml-1">({tabCounts[tab.id]})</span>
-              )}
+              {tabCounts[tab.id] > 0 && <span className="ml-1">({tabCounts[tab.id]})</span>}
             </button>
           ))}
         </div>
 
-        <section className="space-y-3">
-          {filtered.length === 0 ? (
-            <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-center text-xs text-slate-500">
-              Энэ таб дээр одоогоор хүргэлт алга байна.
-            </div>
-          ) : (
-            filtered.map((d) => {
+        {/* List */}
+        {filtered.length === 0 ? (
+          <div className="rounded-2xl border border-slate-200 bg-white px-4 py-4 text-sm text-slate-500">
+            Энэ таб дээр хүргэлт алга байна.
+          </div>
+        ) : (
+          <section className="space-y-3">
+            {filtered.map((d) => {
               const t = typeLabel(d.delivery_type);
-              const sb = statusBadge(d.status);
+              const b = badge(d.status);
+
               const canQuickOnRoute = d.status === "ASSIGNED" && !!d.chosen_driver_id;
+              const canDeleteCancelled = d.status === "CANCELLED" && activeTab === "CLOSED";
 
               return (
                 <div
                   key={d.id}
-                  className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 hover:border-emerald-300 hover:shadow-sm transition"
+                  className="rounded-2xl border border-slate-200 bg-white px-4 py-4 hover:bg-slate-50 transition"
                 >
-                  {/* CARD TOP */}
-                  <button
-                    onClick={() => router.push(`/seller/delivery/${d.id}?tab=${activeTab}`)}
-                    className="w-full text-left"
-                  >
-                    <div className="space-y-1">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
                       <div className="flex items-center gap-2">
-                        <span className="text-xs font-semibold">
-                          #{d.id.slice(0, 6)}
+                        <span className="text-xs">{t.icon}</span>
+                        <div className="text-sm font-semibold text-slate-900 truncate">
+                          {t.label} #{d.id.slice(0, 6)}
+                        </div>
+                        <span className={`text-[10px] px-2 py-1 rounded-full border ${b.cls}`}>
+                          {b.text}
                         </span>
+                      </div>
 
-                        <span
-                          className={
-                            "inline-flex rounded-full border px-2 py-0.5 text-[10px] " +
-                            sb.className
-                          }
-                        >
-                          {sb.text}
-                        </span>
+                      <div className="mt-2 space-y-1">
+                        <div className="text-[11px] text-slate-500">Үүсгэсэн: {fmtDT(d.created_at)}</div>
 
-                        {d.status === "OPEN" && d.bids_count > 0 && (
-                          <span className="inline-flex rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-800">
-                            Санал: {d.bids_count}
-                          </span>
+                        <div className="text-xs text-slate-700">
+                          <span className="font-semibold text-slate-600">Авах:</span>{" "}
+                          {shorten(d.from_address, 70)}
+                        </div>
+                        <div className="text-xs text-slate-700">
+                          <span className="font-semibold text-slate-600">Хүргэх:</span>{" "}
+                          {shorten(d.to_address, 70)}
+                        </div>
+
+                        {d.status === "OPEN" && (
+                          <div className="text-[11px] text-slate-600">
+                            Жолоочийн санал:{" "}
+                            <span className="font-semibold text-slate-900">{d.bid_count || 0}</span>
+                          </div>
                         )}
                       </div>
-
-                      <div className="flex items-center gap-2 text-[11px] text-slate-600">
-                        <span>{t.icon}</span>
-                        <span className="font-medium">{t.label}</span>
-                        <span>•</span>
-                        <span>{formatPrice(d.price_mnt)}</span>
-                      </div>
-
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px] text-slate-600">
-                        <div>
-                          <div className="text-[10px] font-semibold text-slate-500">
-                            АВАХ
-                          </div>
-                          <p>{shorten(d.from_address, 60)}</p>
-                        </div>
-                        <div>
-                          <div className="text-[10px] font-semibold text-slate-500">
-                            ХҮРГЭХ
-                          </div>
-                          <p>{shorten(d.to_address, 60)}</p>
-                        </div>
-                      </div>
-
-                      <p className="text-[10px] text-slate-400">
-                        Үүсгэсэн: {formatDateTime(d.created_at)}
-                      </p>
                     </div>
-                  </button>
 
-                  {/* QUICK ACTIONS (карт дээр шууд) */}
-                  {canQuickOnRoute && (
-                    <div className="mt-3 flex flex-wrap gap-2">
+                    <div className="text-right shrink-0">
+                      <div className="text-[11px] text-slate-500">Үнэ</div>
+                      <div className="text-sm font-semibold text-slate-900">{fmtPrice(d.price_mnt)}</div>
+                    </div>
+                  </div>
+
+                  {/* ✅ QUICK BUTTONS ON CARD */}
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {canQuickOnRoute && (
                       <button
-                        type="button"
-                        onClick={(e) => {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          void handleQuickMarkOnRoute(d.id);
-                        }}
-                        disabled={!!quickLoading[d.id]}
-                        className="text-[11px] px-4 py-2 rounded-full bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-60"
+                        onClick={() => void markOnRoute(d.id)}
+                        disabled={!!actLoading[d.id]}
+                        className="text-[11px] px-4 py-2 rounded-full bg-indigo-600 text-white font-semibold disabled:opacity-60"
                       >
-                        {quickLoading[d.id] ? "Тэмдэглэж байна…" : "Хүргэлтэд гарсан"}
+                        {actLoading[d.id] ? "Тэмдэглэж байна…" : "Хүргэлт гарсан"}
                       </button>
-                    </div>
-                  )}
+                    )}
+
+                    {canDeleteCancelled && (
+                      <button
+                        onClick={() => void hideCancelled(d.id)}
+                        disabled={!!actLoading[d.id]}
+                        className="text-[11px] px-4 py-2 rounded-full bg-slate-900 text-white font-semibold disabled:opacity-60"
+                        title="seller_hidden=true"
+                      >
+                        {actLoading[d.id] ? "Устгаж байна…" : "Хаагдсанаас устгах"}
+                      </button>
+                    )}
+
+                    <button
+                      onClick={() => router.push(`/seller/delivery/${d.id}?tab=${activeTab}`)}
+                      className="text-[11px] px-4 py-2 rounded-full border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                    >
+                      Дэлгэрэнгүй
+                    </button>
+                  </div>
                 </div>
               );
-            })
-          )}
-        </section>
+            })}
+          </section>
+        )}
       </main>
     </div>
   );

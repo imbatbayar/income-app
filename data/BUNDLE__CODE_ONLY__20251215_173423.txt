@@ -1,237 +1,14 @@
-﻿BUNDLE TYPE : DEV_CORE
-ROOT        : F:\khurgelt
-GENERATED   : 2025-12-15 17:22:37
+﻿BUNDLE TYPE : CODE_ONLY
+SOURCE      : .\data\projects.json
+PROJECT     : income-app
+GENERATED   : 2025-12-15 17:34:23
+INCLUDE     : app/, src/, pages/, components/, lib/
+EXCLUDE     : app/api/dev-review/, app/dev-console/
 ==========================================================================================
 
-==========================================================================================
-[001] PATH: .\app\api\dev-review\route.ts
-CHARS: 1790
------ BEGIN FILE 001 -----
-// app/api/dev-review/route.ts
-import { NextResponse } from "next/server";
-import OpenAI from "openai";
-
-export const runtime = "nodejs"; // OpenAI SDK-т илүү найдвартай
-
-export async function POST(req: Request) {
-  try {
-    const body = await req.json();
-    const { code, instruction } = body || {};
-
-    if (!code || !instruction) {
-      return NextResponse.json(
-        { error: "code болон instruction хоёул заавал хэрэгтэй." },
-        { status: 400 }
-      );
-    }
-
-    // API key байхгүй үед шууд ойлгомжтой хариу өгөх (алдаа цацахгүй)
-    if (!process.env.OPENAI_API_KEY) {
-      return NextResponse.json(
-        {
-          result:
-            "OPENAI_API_KEY тохируулагдаагүй байна. .env.local дотор OPENAI_API_KEY=... гэж нэмээд dev серверээ дахин асаана уу.",
-        },
-        { status: 200 }
-      );
-    }
-
-    const client = new OpenAI({
-      apiKey: process.env.OPENAI_API_KEY!,
-    });
-
-    const response = await client.chat.completions.create({
-      model: "gpt-4.1-mini",
-      temperature: 0.2,
-      messages: [
-        {
-          role: "system",
-          content:
-            "Та туршлагатай full-stack инженер. Өгөгдсөн кодыг эвдэлгүйгээр алдаа, сайжруулалт, рефактор, архитектурын зөвлөгөө өгнө.",
-        },
-        {
-          role: "user",
-          content: `
-=== АСУУЛТ / ЗААВАР ===
-${instruction}
-
-=== КОД ===
-${code}
-          `,
-        },
-      ],
-    });
-
-    const result = response.choices?.[0]?.message?.content || "No response";
-
-    return NextResponse.json({ result }, { status: 200 });
-  } catch (err) {
-    console.error("DEV-REVIEW ERROR:", err);
-    return NextResponse.json(
-      { error: "Серверийн алдаа (dev-review route)." },
-      { status: 500 }
-    );
-  }
-}
------ END FILE 001 -----
-
-==========================================================================================
-[002] PATH: .\app\dev-console\page.tsx
-CHARS: 3953
------ BEGIN FILE 002 -----
-"use client";
-
-import { useState } from "react";
-import projectsData from "@/data/projects.json";
-
-// projects.json доторх нэг файлын бүтэц
-type ProjectFile = {
-  path: string;
-  content: string;
-  summary?: string;
-};
-
-// projects.json бүхэлдээ
-type ProjectsMap = {
-  [project: string]: {
-    files: ProjectFile[];
-  };
-};
-
-// JSON-ыг type-тай болгох
-const projects = projectsData as ProjectsMap;
-
-export default function DevConsolePage() {
-  // Одоогоор зөвхөн "income-app" төслийг уншина
-  const files: ProjectFile[] = projects["income-app"]?.files ?? [];
-
-  const [selectedPath, setSelectedPath] = useState("");
-  const [code, setCode] = useState("");
-  const [instruction, setInstruction] = useState("");
-  const [result, setResult] = useState("");
-  const [loading, setLoading] = useState(false);
-
-  // Файл сонгоход кодыг автоматаар харуулах
-  function handleSelect(path: string) {
-    setSelectedPath(path);
-
-    const f = files.find((x) => x.path === path);
-    if (f) {
-      setCode(f.content);
-    } else {
-      setCode("");
-    }
-  }
-
-  // Review API руу илгээх
-  async function runReview() {
-    if (!instruction.trim()) {
-      alert("Instruction хоосон байна!");
-      return;
-    }
-
-    if (!code.trim()) {
-      alert("Код хоосон байна!");
-      return;
-    }
-
-    setLoading(true);
-    setResult("");
-
-    try {
-      const res = await fetch("/api/dev-review", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          code,
-          instruction,
-        }),
-      });
-
-      const json = await res.json();
-      setResult(json.result || json.error || "No response");
-    } catch (err: any) {
-      setResult("Холболтын алдаа: " + (err?.message ?? "unknown"));
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  return (
-    <div className="p-6 space-y-6 max-w-5xl mx-auto">
-      <h1 className="text-2xl font-bold">AI Dev Console V1</h1>
-      <p className="text-sm text-gray-600">
-        income-app төслийн файлаа сонгоод, AI-аас кодын анализ, сайжруулалтын
-        санал авна.
-      </p>
-
-      {/* ФАЙЛ СОНГОГЧ */}
-      <div>
-        <label className="font-semibold">Файл сонгох</label>
-        <select
-          className="border p-2 rounded w-full mt-1"
-          value={selectedPath}
-          onChange={(e) => handleSelect(e.target.value)}
-        >
-          <option value="">-- Файл сонго --</option>
-          {files.map((f) => (
-            <option key={f.path} value={f.path}>
-              {f.path}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      {/* INSTRUCTION */}
-      <div>
-        <label className="font-semibold">Instruction</label>
-        <textarea
-          className="border p-2 rounded w-full h-24 mt-1"
-          placeholder='Ж: "Маргааны таб дээр notification badge нэм, логикийг тайлбарла"'
-          value={instruction}
-          onChange={(e) => setInstruction(e.target.value)}
-        />
-      </div>
-
-      {/* CODE VIEW */}
-      <div>
-        <label className="font-semibold">Код (унших хэсэг)</label>
-        <textarea
-          className="border p-2 rounded w-full h-64 mt-1 font-mono text-sm"
-          value={code}
-          onChange={(e) => setCode(e.target.value)}
-        />
-      </div>
-
-      {/* RUN BUTTON */}
-      <button
-        onClick={runReview}
-        disabled={loading}
-        className="bg-blue-600 text-white px-4 py-2 rounded disabled:opacity-60"
-      >
-        {loading ? "Анализ хийж байна..." : "AI Review ажиллуулах"}
-      </button>
-
-      {/* RESULT */}
-      <div>
-        <label className="font-semibold">Үр дүн</label>
-        <textarea
-          className="border p-2 rounded w-full h-64 mt-1 bg-gray-50 text-sm"
-          value={result}
-          readOnly
-        />
-      </div>
-    </div>
-  );
-}
------ END FILE 002 -----
-
-==========================================================================================
-[003] PATH: 
+[001] PATH: .\app/driver/delivery/[id]/page.tsx
 CHARS: 33260
------ BEGIN FILE 003 -----
+----- BEGIN FILE 001 -----
 "use client";
 
 // =================== 1. Импорт, төрлүүд ===================
@@ -1235,12 +1012,14 @@ export default function DriverDeliveryDetailPage() {
     </div>
   );
 }
------ END FILE 003 -----
+
+----- END FILE 001 -----
 
 ==========================================================================================
-[004] PATH: .\app\driver\page.tsx
+
+[002] PATH: .\app/driver/page.tsx
 CHARS: 22643
------ BEGIN FILE 004 -----
+----- BEGIN FILE 002 -----
 "use client";
 
 // =================== 1. Импорт, төрлүүд ===================
@@ -1939,44 +1718,14 @@ export default function DriverDashboardPage() {
     </div>
   );
 }
------ END FILE 004 -----
+
+----- END FILE 002 -----
 
 ==========================================================================================
-[005] PATH: .\app\globals.css
-CHARS: 488
------ BEGIN FILE 005 -----
-@import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
-
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
-}
------ END FILE 005 -----
-
-==========================================================================================
-[006] PATH: .\app\layout.tsx
+[003] PATH: .\app/layout.tsx
 CHARS: 689
------ BEGIN FILE 006 -----
+----- BEGIN FILE 003 -----
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
@@ -2011,12 +1760,14 @@ export default function RootLayout({
     </html>
   );
 }
------ END FILE 006 -----
+
+----- END FILE 003 -----
 
 ==========================================================================================
-[007] PATH: .\app\page.tsx
+
+[004] PATH: .\app/page.tsx
 CHARS: 6135
------ BEGIN FILE 007 -----
+----- BEGIN FILE 004 -----
 "use client";
 
 import { FormEvent, useState } from "react";
@@ -2200,12 +1951,14 @@ export default function LoginPage() {
     </div>
   );
 }
------ END FILE 007 -----
+
+----- END FILE 004 -----
 
 ==========================================================================================
-[008] PATH: .\app\register\page.tsx
+
+[005] PATH: .\app/register/page.tsx
 CHARS: 11136
------ BEGIN FILE 008 -----
+----- BEGIN FILE 005 -----
 "use client";
 
 import { FormEvent, useState } from "react";
@@ -2519,18 +2272,20 @@ export default function RegisterPage() {
     </div>
   );
 }
------ END FILE 008 -----
+
+----- END FILE 005 -----
 
 ==========================================================================================
-[009] PATH: 
-CHARS: 43352
------ BEGIN FILE 009 -----
+
+[006] PATH: .\app/seller/delivery/[id]/page.tsx
+CHARS: 41810
+----- BEGIN FILE 006 -----
 "use client";
 
 /* ===========================
  * app/seller/delivery/[id]/page.tsx
  * - ✅ Rating (од өгөх) логик бүрэн хассан
- * - ✅ Жолооч цуцлах үед: driver.total_deliveries -50, driver.rating -1
+ * - Маргаан нээх / шийдвэрлэх, жолооч сонгох, цуцлах, төлбөр тэмдэглэх хэвээр
  * =========================== */
 
 import { useEffect, useState } from "react";
@@ -2655,10 +2410,6 @@ function driverRatingText(driver: DriverSummary | null) {
   const r = driver.rating.toFixed(1).replace(/\.0$/, "");
   const total = driver.total_deliveries || 0;
   return `${r} ★ • ${total} хүргэлт`;
-}
-
-function clampMin(n: number, min: number) {
-  return n < min ? min : n;
 }
 
 /* ===========================
@@ -2916,6 +2667,7 @@ export default function SellerDeliveryDetailPage() {
       setDelivery({ ...delivery, status: "ON_ROUTE" });
       setMessage("Хүргэлтэд гарсан гэж тэмдэглэлээ.");
 
+      // ✅ Замд таб руу буцаах (таны хүсэлт)
       setTimeout(() => {
         router.push("/seller?tab=ON_ROUTE");
       }, 250);
@@ -2998,45 +2750,7 @@ export default function SellerDeliveryDetailPage() {
     }
   }
 
-  /* ---------- APPLY CANCEL PENALTY (driver) ---------- */
-  async function applyDriverCancelPenalty(driverId: string) {
-    // users table дээр driver мэдээлэл байна гэж үзэв (id = driverId)
-    // total_deliveries: -50 (min 0)
-    // rating: -1 (min 0)
-    try {
-      const { data, error } = await supabase
-        .from("users")
-        .select("id, total_deliveries, rating")
-        .eq("id", driverId)
-        .maybeSingle();
-
-      if (error) {
-        console.error("PENALTY FETCH ERROR:", error);
-        return;
-      }
-      if (!data) return;
-
-      const currentTotal = Number((data as any).total_deliveries ?? 0);
-      const currentRating = (data as any).rating == null ? null : Number((data as any).rating);
-
-      const nextTotal = clampMin(currentTotal - 50, 0);
-      const nextRating = currentRating == null ? 0 : clampMin(currentRating - 1, 0);
-
-      const { error: updErr } = await supabase
-        .from("users")
-        .update({
-          total_deliveries: nextTotal,
-          rating: nextRating,
-        })
-        .eq("id", driverId);
-
-      if (updErr) console.error("PENALTY UPDATE ERROR:", updErr);
-    } catch (e) {
-      console.error("PENALTY EXCEPTION:", e);
-    }
-  }
-
-  /* ---------- CANCEL DRIVER (ASSIGNED -> OPEN + блок + penalty) ---------- */
+  /* ---------- CANCEL DRIVER (ASSIGNED -> OPEN + блок) ---------- */
   const canCancelDriver = !!delivery && delivery.status === "ASSIGNED" && !!delivery.chosen_driver_id;
 
   function toggleCancelReason(key: keyof typeof cancelReasons) {
@@ -3066,7 +2780,6 @@ export default function SellerDeliveryDetailPage() {
     setMessage(null);
 
     try {
-      // 1) block
       const { error: blockError } = await supabase
         .from("seller_blocked_drivers")
         .insert({ seller_id: user.id, driver_id: blockedDriverId, reason: reasonText });
@@ -3077,7 +2790,6 @@ export default function SellerDeliveryDetailPage() {
         return;
       }
 
-      // 2) reopen delivery
       const { error: updError } = await supabase
         .from("deliveries")
         .update({ status: "OPEN", chosen_driver_id: null })
@@ -3090,10 +2802,6 @@ export default function SellerDeliveryDetailPage() {
         return;
       }
 
-      // 3) ✅ penalty apply (driver)
-      await applyDriverCancelPenalty(blockedDriverId);
-
-      // UI state
       setDelivery({ ...delivery, status: "OPEN", chosen_driver_id: null });
       setBids((prev) => prev.filter((b) => b.driver_id !== blockedDriverId));
 
@@ -3101,9 +2809,7 @@ export default function SellerDeliveryDetailPage() {
       setCancelReasons({ no_show: false, too_late: false, no_contact: false, bad_attitude: false });
       setCancelOtherReason("");
 
-      setMessage(
-        "Жолоочийг цуцалж, хүргэлтийг дахин нээлттэй болголоо. Энэ жолооч таны дараагийн хүргэлтүүд дээр харагдахгүй. (Жолоочийн оноо: -50 хүргэлт, -1 од)"
-      );
+      setMessage("Жолоочийг цуцалж, энэ хүргэлтийг дахин нээлттэй болголоо. Энэ жолооч таны дараагийн хүргэлтүүд дээр харагдахгүй.");
     } finally {
       setCancelling(false);
     }
@@ -3331,9 +3037,7 @@ export default function SellerDeliveryDetailPage() {
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="font-semibold">{chosenBid?.driver?.name || "Жолооч"}</span>
                   <span className="text-[10px] rounded-full bg-emerald-600 text-white px-2 py-0.5">
-                    {delivery.status === "ON_ROUTE" || delivery.status === "DELIVERED"
-                      ? "Энэ хүргэлтийг хийж буй жолооч"
-                      : "Сонгосон жолооч"}
+                    {delivery.status === "ON_ROUTE" || delivery.status === "DELIVERED" ? "Энэ хүргэлтийг хийж буй жолооч" : "Сонгосон жолооч"}
                   </span>
                 </div>
                 <p className="text-[11px] text-slate-500">Утас: {chosenBid?.driver?.phone || "утасны дугаар бүртгэгдээгүй"}</p>
@@ -3676,12 +3380,14 @@ export default function SellerDeliveryDetailPage() {
     </div>
   );
 }
------ END FILE 009 -----
+
+----- END FILE 006 -----
 
 ==========================================================================================
-[010] PATH: .\app\seller\new-delivery\page.tsx
+
+[007] PATH: .\app/seller/new-delivery/page.tsx
 CHARS: 9295
------ BEGIN FILE 010 -----
+----- BEGIN FILE 007 -----
 "use client";
 
 import { useEffect, useState } from "react";
@@ -3986,12 +3692,14 @@ export default function NewDeliveryPage() {
     </div>
   );
 }
------ END FILE 010 -----
+
+----- END FILE 007 -----
 
 ==========================================================================================
-[011] PATH: .\app\seller\page.tsx
+
+[008] PATH: .\app/seller/page.tsx
 CHARS: 15563
------ BEGIN FILE 011 -----
+----- BEGIN FILE 008 -----
 "use client";
 
 /* ===========================
@@ -4475,12 +4183,14 @@ export default function SellerDashboardPage() {
     </div>
   );
 }
------ END FILE 011 -----
+
+----- END FILE 008 -----
 
 ==========================================================================================
-[012] PATH: .\lib\deliveryLogic.ts
+
+[009] PATH: .\lib/deliveryLogic.ts
 CHARS: 3602
------ BEGIN FILE 012 -----
+----- BEGIN FILE 009 -----
 // ===================== lib/deliveryLogic.ts =====================
 // Хүргэлтийн статус, табуудын төвлөрсөн логик
 // - PAID статус / таб ашиглахгүй
@@ -4619,12 +4329,14 @@ export function shouldCloseDelivery(input: {
 export function canOpenDisputeForDriver(status: DeliveryStatus): boolean {
   return status === "ON_ROUTE" || status === "DELIVERED";
 }
------ END FILE 012 -----
+
+----- END FILE 009 -----
 
 ==========================================================================================
-[013] PATH: .\lib\supabase.ts
+
+[010] PATH: .\lib/supabase.ts
 CHARS: 208
------ BEGIN FILE 013 -----
+----- BEGIN FILE 010 -----
 // lib/supabase.ts
 import { createClient } from "@supabase/supabase-js";
 
@@ -4632,12 +4344,14 @@ export const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 );
------ END FILE 013 -----
+
+----- END FILE 010 -----
 
 ==========================================================================================
-[014] PATH: .\lib\types.ts
+
+[011] PATH: .\lib/types.ts
 CHARS: 214
------ BEGIN FILE 014 -----
+----- BEGIN FILE 011 -----
 // lib/types.ts
 // Апп даяар ашиглах үндсэн төрлүүд
 
@@ -4650,6 +4364,9 @@ export type IncomeUser = {
   phone: string;
   email: string;
 };
------ END FILE 014 -----
+
+----- END FILE 011 -----
+
+==========================================================================================
 
 

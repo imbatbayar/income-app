@@ -1,11 +1,28 @@
 "use client";
 
-// =================== 1. Импорт, төрлүүд ===================
+/* ===========================
+ * app/driver/page.tsx (FINAL)
+ *
+ * ✅ OPEN: карт дээрээс "Авах хүсэлт" (driver_bids insert) / "Хүсэлт цуцлах" (delete)
+ * ✅ ASSIGNED: "Замд гарсан" -> ON_ROUTE
+ * ✅ ON_ROUTE: "Хүргэлсэн" -> DELIVERED
+ * ✅ DELIVERED: "Төлбөр авснаа батлах" -> driver_confirmed_payment toggle
+ *    Хэрэв seller_marked_paid=true бол CLOSED болно (shouldCloseDelivery)
+ * ✅ Маргаан: ON_ROUTE / DELIVERED үед (canOpenDisputeForDriver)
+ *
+ * ❌ Жолооч үнэлэх/одуулах UI энд байхгүй
+ * =========================== */
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
-import { DeliveryStatus } from "@/lib/deliveryLogic";
+import {
+  DeliveryStatus,
+  DRIVER_TABS,
+  DriverTabId,
+  canOpenDisputeForDriver,
+  shouldCloseDelivery,
+} from "@/lib/deliveryLogic";
 
 type Role = "seller" | "driver";
 
@@ -17,17 +34,9 @@ type IncomeUser = {
   email: string;
 };
 
-// ✅ PAID таб байхгүй. DISPUTE хамгийн сүүлд.
-type DriverTabId =
-  | "OPEN"
-  | "ASSIGNED"
-  | "ON_ROUTE"
-  | "DELIVERED"
-  | "CLOSED"
-  | "DISPUTE";
-
 type DeliveryRow = {
   id: string;
+  seller_id: string;
   from_address: string | null;
   to_address: string | null;
   note: string | null;
@@ -35,31 +44,48 @@ type DeliveryRow = {
   created_at: string;
   price_mnt: number | null;
   delivery_type: string | null;
-  seller_marked_paid: boolean;
-  driver_confirmed_payment: boolean;
+
   chosen_driver_id: string | null;
 
-  // OPEN таб дээр миний хүсэлт (bid) байгаа эсэх
-  hasBid: boolean;
-};
+  seller_marked_paid: boolean;
+  driver_confirmed_payment: boolean;
+  closed_at: string | null;
 
-// Драйверийн табууд (✅ DISPUTE хамгийн сүүлд)
-const DRIVER_TABS: { id: DriverTabId; label: string }[] = [
-  { id: "OPEN", label: "Нээлттэй" },
-  { id: "ASSIGNED", label: "Намайг сонгосон" },
-  { id: "ON_ROUTE", label: "Замд" },
-  { id: "DELIVERED", label: "Хүргэсэн" },
-  { id: "CLOSED", label: "Хаагдсан" },
-  { id: "DISPUTE", label: "Маргаантай" },
-];
+  dispute_reason: string | null;
+  dispute_opened_at: string | null;
+
+  seller_hidden: boolean;
+
+  // dashboard-only
+  has_bid?: boolean;
+};
 
 const TAB_IDS: DriverTabId[] = DRIVER_TABS.map((t) => t.id);
 
-// =================== 2. Туслах функцууд ===================
+// ---------------- helpers ----------------
 
-function typeLabel(
-  deliveryType: string | null
-): { icon: string; label: string } {
+function fmtPrice(n: number | null | undefined) {
+  const v = Number(n || 0);
+  return v ? `${v.toLocaleString("mn-MN")}₮` : "Үнэ тохиролцоно";
+}
+
+function fmtDT(iso: string | null | undefined) {
+  if (!iso) return "";
+  try {
+    return new Date(iso).toLocaleString("mn-MN", { hour12: false });
+  } catch {
+    return iso;
+  }
+}
+
+function shorten(s: string | null, max = 110) {
+  if (!s) return "";
+  const t = s.trim();
+  if (t.length <= max) return t;
+  return t.slice(0, max).replace(/\s+$/, "") + "…";
+}
+
+function typeLabel(deliveryType: string | null): { icon: string; label: string } {
   switch (deliveryType) {
     case "apartment":
       return { icon: "🏙", label: "Байр" };
@@ -74,528 +100,507 @@ function typeLabel(
   }
 }
 
-function statusBadge(status: DeliveryStatus) {
+function badge(status: DeliveryStatus) {
   switch (status) {
     case "OPEN":
-      return {
-        text: "Нээлттэй",
-        className: "bg-emerald-50 text-emerald-700 border-emerald-100",
-      };
+      return { text: "Нээлттэй", cls: "bg-emerald-50 text-emerald-700 border-emerald-100" };
     case "ASSIGNED":
-      return {
-        text: "Танд оноосон",
-        className: "bg-sky-50 text-sky-700 border-sky-100",
-      };
+      return { text: "Намайг сонгосон", cls: "bg-sky-50 text-sky-700 border-sky-100" };
     case "ON_ROUTE":
-      return {
-        text: "Замд",
-        className: "bg-indigo-50 text-indigo-700 border-indigo-100",
-      };
+      return { text: "Замд", cls: "bg-indigo-50 text-indigo-700 border-indigo-100" };
     case "DELIVERED":
-      return {
-        text: "Хүргэсэн",
-        className: "bg-slate-900 text-white border-slate-900",
-      };
-    case "CLOSED":
-      return {
-        text: "Хаагдсан",
-        className: "bg-slate-800 text-slate-50 border-slate-800",
-      };
-    case "CANCELLED":
-      return {
-        text: "Цуцалсан",
-        className: "bg-rose-50 text-rose-700 border-rose-100",
-      };
+      return { text: "Хүргэсэн", cls: "bg-amber-50 text-amber-700 border-amber-100" };
     case "DISPUTE":
-      return {
-        text: "Маргаан",
-        className: "bg-rose-50 text-rose-700 border-rose-100",
-      };
+      return { text: "Маргаан", cls: "bg-rose-50 text-rose-700 border-rose-100" };
+    case "CLOSED":
+      return { text: "Хаагдсан", cls: "bg-slate-50 text-slate-700 border-slate-200" };
+    case "CANCELLED":
+      return { text: "Цуцалсан", cls: "bg-rose-50 text-rose-700 border-rose-100" };
     default:
-      return {
-        text: status,
-        className: "bg-slate-50 text-slate-600 border-slate-100",
-      };
+      return { text: status, cls: "bg-slate-50 text-slate-700 border-slate-200" };
   }
 }
 
-function shorten(s: string | null, max = 110) {
-  if (!s) return "";
-  const t = s.trim();
-  if (t.length <= max) return t;
-  return t.slice(0, max).replace(/\s+$/, "") + "…";
-}
-
-function formatPrice(n: number | null) {
-  if (!n) return "Үнэ тохиролцоно";
-  return n.toLocaleString("mn-MN") + "₮";
-}
-
-function formatDateTime(iso: string) {
-  if (!iso) return "";
-  const d = new Date(iso);
-  return (
-    d.toLocaleDateString("mn-MN", { month: "2-digit", day: "2-digit" }) +
-    " " +
-    d.toLocaleTimeString("mn-MN", { hour: "2-digit", minute: "2-digit" })
-  );
-}
-
-// Табыгаар filter хийх
-function filterByTab(tab: DriverTabId, items: DeliveryRow[]): DeliveryRow[] {
+function filterByTab(tab: DriverTabId, items: DeliveryRow[], driverId: string) {
   return items.filter((d) => {
+    // OPEN таб: зөвхөн OPEN
+    if (tab === "OPEN") return d.status === "OPEN";
+
+    // бусад табууд: зөвхөн өөрт оноогдсон хүргэлтүүд
+    const isMine = d.chosen_driver_id === driverId;
+
     switch (tab) {
-      case "OPEN":
-        return d.status === "OPEN";
       case "ASSIGNED":
-        return d.status === "ASSIGNED";
+        return isMine && d.status === "ASSIGNED";
       case "ON_ROUTE":
-        return d.status === "ON_ROUTE";
+        return isMine && d.status === "ON_ROUTE";
       case "DELIVERED":
-        return d.status === "DELIVERED";
-      case "CLOSED":
-        return d.status === "CLOSED";
+        return isMine && d.status === "DELIVERED";
       case "DISPUTE":
-        return d.status === "DISPUTE";
+        return isMine && d.status === "DISPUTE";
+      case "CLOSED":
+        return isMine && (d.status === "CLOSED" || d.status === "CANCELLED");
       default:
-        return true;
+        return false;
     }
   });
 }
 
-// =================== 3. Гол компонент ===================
+// ---------------- page ----------------
 
 export default function DriverDashboardPage() {
   const router = useRouter();
-  const searchParams = useSearchParams();
-
-  const urlTab = searchParams.get("tab");
-  const urlTabId = useMemo(() => {
-    if (urlTab && TAB_IDS.includes(urlTab as DriverTabId)) {
-      return urlTab as DriverTabId;
-    }
-    return null;
-  }, [urlTab]);
+  const sp = useSearchParams();
 
   const [user, setUser] = useState<IncomeUser | null>(null);
   const [loadingUser, setLoadingUser] = useState(true);
 
-  const [deliveries, setDeliveries] = useState<DeliveryRow[]>([]);
-  const [loadingList, setLoadingList] = useState(true);
-
   const [activeTab, setActiveTab] = useState<DriverTabId>("OPEN");
 
-  const [message, setMessage] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [deliveries, setDeliveries] = useState<DeliveryRow[]>([]);
+
   const [error, setError] = useState<string | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
 
-  // =================== 4. Login guard ===================
+  // per-delivery loading flags
+  const [actLoading, setActLoading] = useState<Record<string, boolean>>({});
 
+  // dispute modal
+  const [showDispute, setShowDispute] = useState(false);
+  const [disputeReason, setDisputeReason] = useState("");
+  const [disputeDeliveryId, setDisputeDeliveryId] = useState<string | null>(null);
+
+  // ---------------- auth ----------------
   useEffect(() => {
     try {
       const raw = window.localStorage.getItem("incomeUser");
-      if (!raw) {
-        router.replace("/");
-        return;
-      }
-      const parsed: IncomeUser = JSON.parse(raw);
-      if (parsed.role !== "driver") {
-        router.replace("/");
-        return;
-      }
-      setUser(parsed);
-      setLoadingUser(false);
-    } catch (e) {
-      console.error(e);
-      setError("Хэрэглэгчийн мэдээлэл уншихад алдаа гарлаа.");
+      if (!raw) return router.replace("/");
+      const u: IncomeUser = JSON.parse(raw);
+      if (u.role !== "driver") return router.replace("/");
+      setUser(u);
+    } catch {
+      router.replace("/");
+    } finally {
       setLoadingUser(false);
     }
   }, [router]);
 
-  // =================== 5. Табын эхний утга (URL / localStorage) ===================
-
+  // ---------------- tab init ----------------
   useEffect(() => {
-    if (typeof window === "undefined") return;
-
-    if (urlTabId) {
-      setActiveTab(urlTabId);
-      window.localStorage.setItem("driverActiveTab", urlTabId);
+    const urlTab = sp.get("tab");
+    if (urlTab && TAB_IDS.includes(urlTab as DriverTabId)) {
+      setActiveTab(urlTab as DriverTabId);
+      localStorage.setItem("driverActiveTab", urlTab);
       return;
     }
-
-    const stored = window.localStorage.getItem("driverActiveTab");
+    const stored = localStorage.getItem("driverActiveTab");
     if (stored && TAB_IDS.includes(stored as DriverTabId)) {
       setActiveTab(stored as DriverTabId);
     }
-  }, [urlTabId]);
+  }, [sp]);
 
   function changeTab(tab: DriverTabId) {
     setActiveTab(tab);
-    if (typeof window !== "undefined") {
-      window.localStorage.setItem("driverActiveTab", tab);
-    }
+    localStorage.setItem("driverActiveTab", tab);
     router.push(`/driver?tab=${tab}`);
   }
 
-  // =================== 6. Хүргэлтийн жагсаалт татах ===================
-
-  async function fetchDeliveries(driverId: string) {
-    try {
-      setLoadingList(true);
-      setError(null);
-      setMessage(null);
-
-      // 6.1 Нээлттэй бүх хүргэлт
-      const { data: openData, error: openError } = await supabase
-        .from("deliveries")
-        .select(
-          `
-          id,
-          from_address,
-          to_address,
-          note,
-          status,
-          created_at,
-          price_mnt,
-          delivery_type,
-          seller_marked_paid,
-          driver_confirmed_payment,
-          chosen_driver_id
-        `
-        )
-        .eq("status", "OPEN")
-        .order("created_at", { ascending: false });
-
-      if (openError) console.error(openError);
-
-      // 6.2 Энэ жолоочид оноогдсон / өмнө нь хийж байсан бүх хүргэлт
-      const { data: mineData, error: mineError } = await supabase
-        .from("deliveries")
-        .select(
-          `
-          id,
-          from_address,
-          to_address,
-          note,
-          status,
-          created_at,
-          price_mnt,
-          delivery_type,
-          seller_marked_paid,
-          driver_confirmed_payment,
-          chosen_driver_id
-        `
-        )
-        .eq("chosen_driver_id", driverId)
-        .order("created_at", { ascending: false });
-
-      if (mineError) console.error(mineError);
-
-      const openRows = (openData || []) as any[];
-      const mineRows = (mineData || []) as any[];
-
-      // 6.3 Дубликатгүй нэгтгэх
-      const mergedMap = new Map<string, any>();
-      for (const d of [...openRows, ...mineRows]) {
-        if (!mergedMap.has(d.id)) mergedMap.set(d.id, d);
-      }
-      const merged = Array.from(mergedMap.values());
-
-      // 6.4 Энэ жолоочийн илгээсэн бүх хүсэлтүүд
-      const { data: bidData, error: bidError } = await supabase
-        .from("driver_bids")
-        .select("delivery_id")
-        .eq("driver_id", driverId);
-
-      if (bidError) console.error(bidError);
-
-      const bidSet = new Set<string>(
-        (bidData || []).map((b: any) => b.delivery_id as string)
-      );
-
-      // 6.5 Map (PAID таарах ёсгүй, гэхдээ хуучин дата байвал DELIVERED болгож normalize)
-      const rows: DeliveryRow[] = merged.map((d: any) => ({
-        id: d.id,
-        from_address: d.from_address,
-        to_address: d.to_address,
-        note: d.note,
-        status: (d.status === "PAID" ? "DELIVERED" : d.status) as DeliveryStatus,
-        created_at: d.created_at,
-        price_mnt: d.price_mnt,
-        delivery_type: d.delivery_type,
-        seller_marked_paid: !!d.seller_marked_paid,
-        driver_confirmed_payment: !!d.driver_confirmed_payment,
-        chosen_driver_id: d.chosen_driver_id,
-        hasBid: bidSet.has(d.id),
-      }));
-
-      setDeliveries(rows);
-    } catch (e) {
-      console.error(e);
-      setError("Хүргэлтийн жагсаалт татахад алдаа гарлаа.");
-      setDeliveries([]);
-    } finally {
-      setLoadingList(false);
-    }
-  }
-
-  // 6.A: user орж ирмэгц татна
+  // ---------------- fetch ----------------
   useEffect(() => {
     if (!user) return;
     void fetchDeliveries(user.id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user]);
+  }, [user?.id]);
 
-  // ✅ 6.B: URL tab солигдох / detail-ээс буцаж ирэхэд refresh
+  // focus refresh
   useEffect(() => {
     if (!user) return;
-    void fetchDeliveries(user.id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user?.id, urlTab]);
-
-  // ✅ 6.C: Browser focus үед refresh (detail → back хийхэд их хэрэгтэй)
-  useEffect(() => {
-    if (!user) return;
-    const onFocus = () => {
-      void fetchDeliveries(user.id);
-    };
+    const onFocus = () => void fetchDeliveries(user.id);
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id]);
 
-  // =================== 7. Гарах ===================
+  async function fetchDeliveries(driverId: string) {
+    setLoading(true);
+    setError(null);
 
-  function handleLogout() {
-    if (typeof window !== "undefined") {
-      window.localStorage.removeItem("incomeUser");
-    }
-    router.push("/");
-  }
+    try {
+      // 1) OPEN deliveries (seller_hidden=false)
+      const { data: openData, error: e1 } = await supabase
+        .from("deliveries")
+        .select(
+          `
+          id,
+          seller_id,
+          from_address,
+          to_address,
+          note,
+          status,
+          created_at,
+          price_mnt,
+          delivery_type,
+          chosen_driver_id,
+          seller_marked_paid,
+          driver_confirmed_payment,
+          closed_at,
+          dispute_reason,
+          dispute_opened_at,
+          seller_hidden
+        `
+        )
+        .eq("status", "OPEN")
+        .eq("seller_hidden", false)
+        .order("created_at", { ascending: false });
 
-  // =================== 8. Жагсаалтын UI ===================
+      if (e1) throw e1;
 
-  function renderList(items: DeliveryRow[], currentTab: DriverTabId) {
-    // OPEN таб: нээлттэй + миний саналууд (цуцлах товч энд байхгүй)
-    if (currentTab === "OPEN") {
-      const openWithoutBid = items.filter((d) => !d.hasBid);
-      const openWithBid = items.filter((d) => d.hasBid);
+      // 2) My assigned deliveries
+      const { data: mineData, error: e2 } = await supabase
+        .from("deliveries")
+        .select(
+          `
+          id,
+          seller_id,
+          from_address,
+          to_address,
+          note,
+          status,
+          created_at,
+          price_mnt,
+          delivery_type,
+          chosen_driver_id,
+          seller_marked_paid,
+          driver_confirmed_payment,
+          closed_at,
+          dispute_reason,
+          dispute_opened_at,
+          seller_hidden
+        `
+        )
+        .eq("chosen_driver_id", driverId)
+        .eq("seller_hidden", false)
+        .order("created_at", { ascending: false });
 
-      if (openWithoutBid.length === 0 && openWithBid.length === 0) {
-        return (
-          <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-center text-xs text-slate-500">
-            Нээлттэй хүргэлт одоогоор алга байна.
-          </div>
-        );
+      if (e2) throw e2;
+
+      // merge map
+      const map = new Map<string, DeliveryRow>();
+
+      function normalize(d: any): DeliveryRow {
+        return {
+          id: d.id,
+          seller_id: d.seller_id,
+          from_address: d.from_address,
+          to_address: d.to_address,
+          note: d.note,
+          status: d.status as DeliveryStatus,
+          created_at: d.created_at,
+          price_mnt: d.price_mnt,
+          delivery_type: d.delivery_type,
+          chosen_driver_id: d.chosen_driver_id,
+          seller_marked_paid: !!d.seller_marked_paid,
+          driver_confirmed_payment: !!d.driver_confirmed_payment,
+          closed_at: d.closed_at,
+          dispute_reason: d.dispute_reason ?? null,
+          dispute_opened_at: d.dispute_opened_at ?? null,
+          seller_hidden: !!d.seller_hidden,
+        };
       }
 
-      const renderItem = (d: DeliveryRow, opts?: { dim?: boolean }) => {
-        const t = typeLabel(d.delivery_type);
-        const sb = statusBadge(d.status);
+      for (const d of openData || []) map.set(d.id, normalize(d));
+      for (const d of mineData || []) map.set(d.id, normalize(d));
 
-        const subtitle =
-          d.status === "OPEN"
-            ? d.hasBid
-              ? "Та энэ хүргэлт дээр авах санал илгээсэн."
-              : "Энэ хүргэлтэд авах санал илгээгүй байна."
-            : "";
+      const merged = Array.from(map.values());
 
-        const dimClass = opts?.dim ? "opacity-70" : "";
+      // 3) My bids set
+      const { data: bidData, error: e3 } = await supabase
+        .from("driver_bids")
+        .select("delivery_id")
+        .eq("driver_id", driverId);
 
-        return (
-          <button
-            key={d.id}
-            type="button"
-            onClick={() =>
-              router.push(`/driver/delivery/${d.id}?tab=${activeTab}`)
-            }
-            className={
-              "w-full text-left rounded-2xl border border-slate-200 bg-white px-4 py-3 hover:border-emerald-300 hover:shadow-sm transition " +
-              dimClass
-            }
-          >
-            <div className="flex items-start justify-between gap-3">
-              <div className="flex-1 space-y-1">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-xs font-semibold text-slate-900">
-                    #{d.id.slice(0, 6)}
-                  </span>
-                  <span
-                    className={
-                      "inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium " +
-                      sb.className
-                    }
-                  >
-                    {sb.text}
-                  </span>
-                  {d.status === "OPEN" && d.hasBid && (
-                    <span className="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-medium text-emerald-700">
-                      Хүсэлт илгээсэн
-                    </span>
-                  )}
-                </div>
+      if (e3) {
+        console.error(e3);
+      }
 
-                <div className="flex items-center gap-2 text-[11px] text-slate-600">
-                  <span>{t.icon}</span>
-                  <span className="font-medium">{t.label}</span>
-                  <span className="text-slate-400">•</span>
-                  <span>{formatPrice(d.price_mnt)}</span>
-                </div>
+      const bidSet = new Set<string>((bidData || []).map((b: any) => String(b.delivery_id)));
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px] text-slate-600 mt-1">
-                  <div>
-                    <div className="text-[10px] font-semibold text-slate-500">
-                      АВАХ
-                    </div>
-                    <p>{shorten(d.from_address, 60)}</p>
-                  </div>
-                  <div>
-                    <div className="text-[10px] font-semibold text-slate-500">
-                      ХҮРГЭХ
-                    </div>
-                    <p>{shorten(d.to_address, 60)}</p>
-                  </div>
-                </div>
-
-                {d.note && (
-                  <p className="mt-1 text-[11px] text-slate-500">
-                    {shorten(d.note, 80)}
-                  </p>
-                )}
-
-                <p className="mt-1 text-[10px] text-slate-400">
-                  Үүсгэсэн: {formatDateTime(d.created_at)}
-                </p>
-
-                {subtitle && (
-                  <p className="mt-1 text-[10px] text-slate-500">{subtitle}</p>
-                )}
-              </div>
-            </div>
-          </button>
-        );
-      };
-
-      return (
-        <div className="space-y-5">
-          {openWithoutBid.length > 0 && (
-            <div className="space-y-2">
-              <p className="px-1 text-[11px] font-medium text-slate-600">
-                Нээлттэй захиалгууд
-              </p>
-              <div className="space-y-3">
-                {openWithoutBid.map((d) => renderItem(d))}
-              </div>
-            </div>
-          )}
-
-          {openWithBid.length > 0 && (
-            <div className="space-y-2">
-              <p className="px-1 text-[11px] font-medium text-slate-600">
-                Миний өгсөн саналууд
-              </p>
-              <div className="space-y-3">
-                {openWithBid.map((d) => renderItem(d, { dim: true }))}
-              </div>
-            </div>
-          )}
-        </div>
+      // attach has_bid
+      const withBidFlag = merged.map((d) =>
+        d.status === "OPEN" ? { ...d, has_bid: bidSet.has(d.id) } : d
       );
+
+      setDeliveries(withBidFlag);
+    } catch (e) {
+      console.error(e);
+      setDeliveries([]);
+      setError("Жагсаалт татахад алдаа гарлаа.");
+    } finally {
+      setLoading(false);
     }
-
-    // Бусад табууд
-    if (items.length === 0) {
-      return (
-        <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-center text-xs text-slate-500">
-          Энэ таб дээр одоогоор хүргэлт алга байна.
-        </div>
-      );
-    }
-
-    return (
-      <div className="space-y-3">
-        {items.map((d) => {
-          const t = typeLabel(d.delivery_type);
-          const sb = statusBadge(d.status);
-
-          let subtitle = "";
-          if (d.status === "ASSIGNED") subtitle = "Энэ хүргэлт танд оноосон байна.";
-          else if (d.status === "ON_ROUTE") subtitle = "Та барааг аваад хүргэлтэд гарсан.";
-          else if (d.status === "DELIVERED") subtitle = "Энэ хүргэлт хүргэсэн төлөвт байна.";
-          else if (d.status === "CLOSED") subtitle = "Энэ хүргэлт бүрэн хаагдсан.";
-          else if (d.status === "DISPUTE") subtitle = "Энэ хүргэлт маргаантай байна.";
-
-          return (
-            <button
-              key={d.id}
-              type="button"
-              onClick={() =>
-                router.push(`/driver/delivery/${d.id}?tab=${activeTab}`)
-              }
-              className="w-full text-left rounded-2xl border border-slate-200 bg-white px-4 py-3 hover:border-emerald-300 hover:shadow-sm transition"
-            >
-              <div className="flex items-start justify-between gap-3">
-                <div className="flex-1 space-y-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-xs font-semibold text-slate-900">
-                      #{d.id.slice(0, 6)}
-                    </span>
-                    <span
-                      className={
-                        "inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium " +
-                        sb.className
-                      }
-                    >
-                      {sb.text}
-                    </span>
-                  </div>
-
-                  <div className="flex items-center gap-2 text-[11px] text-slate-600">
-                    <span>{t.icon}</span>
-                    <span className="font-medium">{t.label}</span>
-                    <span className="text-slate-400">•</span>
-                    <span>{formatPrice(d.price_mnt)}</span>
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px] text-slate-600 mt-1">
-                    <div>
-                      <div className="text-[10px] font-semibold text-slate-500">
-                        АВАХ
-                      </div>
-                      <p>{shorten(d.from_address, 60)}</p>
-                    </div>
-                    <div>
-                      <div className="text-[10px] font-semibold text-slate-500">
-                        ХҮРГЭХ
-                      </div>
-                      <p>{shorten(d.to_address, 60)}</p>
-                    </div>
-                  </div>
-
-                  {d.note && (
-                    <p className="mt-1 text-[11px] text-slate-500">
-                      {shorten(d.note, 80)}
-                    </p>
-                  )}
-
-                  <p className="mt-1 text-[10px] text-slate-400">
-                    Үүсгэсэн: {formatDateTime(d.created_at)}
-                  </p>
-
-                  {subtitle && (
-                    <p className="mt-1 text-[10px] text-slate-500">{subtitle}</p>
-                  )}
-                </div>
-              </div>
-            </button>
-          );
-        })}
-      </div>
-    );
   }
 
-  // =================== 9. Ачаалалт / алдаа ===================
+  // ---------------- actions ----------------
 
-  if (loadingUser || loadingList) {
+  function setLoadingFor(id: string, val: boolean) {
+    setActLoading((prev) => ({ ...prev, [id]: val }));
+  }
+
+  async function requestOpenDelivery(deliveryId: string) {
+    if (!user) return;
+    setError(null);
+    setMsg(null);
+    setLoadingFor(deliveryId, true);
+
+    try {
+      const { error } = await supabase
+        .from("driver_bids")
+        .insert({ delivery_id: deliveryId, driver_id: user.id });
+
+      if (error) {
+        console.error(error);
+        setError("Авах хүсэлт илгээхэд алдаа гарлаа.");
+        return;
+      }
+
+      setDeliveries((prev) =>
+        prev.map((d) => (d.id === deliveryId ? { ...d, has_bid: true } : d))
+      );
+      setMsg("Авах хүсэлт илгээлээ.");
+    } finally {
+      setLoadingFor(deliveryId, false);
+    }
+  }
+
+  async function cancelMyBid(deliveryId: string) {
+    if (!user) return;
+    setError(null);
+    setMsg(null);
+    setLoadingFor(deliveryId, true);
+
+    try {
+      const { error } = await supabase
+        .from("driver_bids")
+        .delete()
+        .eq("delivery_id", deliveryId)
+        .eq("driver_id", user.id);
+
+      if (error) {
+        console.error(error);
+        setError("Хүсэлт цуцлахад алдаа гарлаа.");
+        return;
+      }
+
+      setDeliveries((prev) =>
+        prev.map((d) => (d.id === deliveryId ? { ...d, has_bid: false } : d))
+      );
+      setMsg("Хүсэлт цуцлагдлаа.");
+    } finally {
+      setLoadingFor(deliveryId, false);
+    }
+  }
+
+  async function updateStatusMine(deliveryId: string, from: DeliveryStatus, to: DeliveryStatus) {
+    if (!user) return;
+    setError(null);
+    setMsg(null);
+    setLoadingFor(deliveryId, true);
+
+    try {
+      const { error } = await supabase
+        .from("deliveries")
+        .update({ status: to })
+        .eq("id", deliveryId)
+        .eq("chosen_driver_id", user.id)
+        .eq("status", from);
+
+      if (error) {
+        console.error(error);
+        setError("Статус шинэчлэхэд алдаа гарлаа.");
+        return;
+      }
+
+      setDeliveries((prev) =>
+        prev.map((d) => (d.id === deliveryId ? { ...d, status: to } : d))
+      );
+
+      // redirect to matching tab
+      localStorage.setItem("driverActiveTab", to === "CANCELLED" || to === "CLOSED" ? "CLOSED" : (to as any));
+      router.push(`/driver?tab=${to === "CANCELLED" || to === "CLOSED" ? "CLOSED" : to}`);
+    } finally {
+      setLoadingFor(deliveryId, false);
+    }
+  }
+
+  async function toggleDriverPayment(deliveryId: string) {
+    if (!user) return;
+    const d = deliveries.find((x) => x.id === deliveryId);
+    if (!d) return;
+
+    if (!(d.status === "DELIVERED" || d.status === "CLOSED")) {
+      setError("Зөвхөн 'Хүргэсэн' үед төлбөр батална.");
+      return;
+    }
+    if (d.chosen_driver_id !== user.id) {
+      setError("Энэ хүргэлт танд оноогдоогүй байна.");
+      return;
+    }
+
+    setError(null);
+    setMsg(null);
+    setLoadingFor(deliveryId, true);
+
+    try {
+      const nextPaid = !d.driver_confirmed_payment;
+
+      const willClose = shouldCloseDelivery({
+        status: d.status,
+        seller_marked_paid: d.seller_marked_paid,
+        driver_confirmed_payment: nextPaid,
+      });
+
+      const nextStatus: DeliveryStatus = willClose ? "CLOSED" : d.status;
+      const closedAt = willClose ? new Date().toISOString() : d.closed_at;
+
+      const { error } = await supabase
+        .from("deliveries")
+        .update({
+          driver_confirmed_payment: nextPaid,
+          status: nextStatus,
+          closed_at: closedAt,
+        })
+        .eq("id", deliveryId)
+        .eq("chosen_driver_id", user.id);
+
+      if (error) {
+        console.error(error);
+        setError("Төлбөр батлахад алдаа гарлаа.");
+        return;
+      }
+
+      setDeliveries((prev) =>
+        prev.map((x) =>
+          x.id === deliveryId
+            ? { ...x, driver_confirmed_payment: nextPaid, status: nextStatus, closed_at: closedAt }
+            : x
+        )
+      );
+
+      setMsg(nextPaid ? "Төлбөр авснаа баталлаа." : "Төлбөрийн баталгааг цуцаллаа.");
+
+      if (nextStatus === "CLOSED") {
+        localStorage.setItem("driverActiveTab", "CLOSED");
+        router.push("/driver?tab=CLOSED");
+      }
+    } finally {
+      setLoadingFor(deliveryId, false);
+    }
+  }
+
+  function openDisputeModal(deliveryId: string) {
+    setDisputeDeliveryId(deliveryId);
+    setDisputeReason("");
+    setShowDispute(true);
+  }
+
+  async function submitDispute() {
+    if (!user) return;
+    if (!disputeDeliveryId) return;
+
+    const d = deliveries.find((x) => x.id === disputeDeliveryId);
+    if (!d) return;
+
+    if (d.chosen_driver_id !== user.id) {
+      setError("Энэ хүргэлт танд оноогдоогүй байна.");
+      return;
+    }
+    if (!canOpenDisputeForDriver(d.status)) {
+      setError("Энэ төлөв дээр маргаан нээх боломжгүй.");
+      return;
+    }
+
+    const reason = disputeReason.trim();
+    if (!reason) {
+      setError("Маргааны шалтгаанаа бичнэ үү.");
+      return;
+    }
+
+    setError(null);
+    setMsg(null);
+    setLoadingFor(disputeDeliveryId, true);
+
+    try {
+      const openedAt = new Date().toISOString();
+
+      const { error } = await supabase
+        .from("deliveries")
+        .update({
+          status: "DISPUTE",
+          dispute_reason: reason,
+          dispute_opened_at: openedAt,
+        })
+        .eq("id", disputeDeliveryId)
+        .eq("chosen_driver_id", user.id);
+
+      if (error) {
+        console.error(error);
+        setError("Маргаан нээхэд алдаа гарлаа.");
+        return;
+      }
+
+      setDeliveries((prev) =>
+        prev.map((x) =>
+          x.id === disputeDeliveryId
+            ? { ...x, status: "DISPUTE", dispute_reason: reason, dispute_opened_at: openedAt }
+            : x
+        )
+      );
+
+      setShowDispute(false);
+      setDisputeDeliveryId(null);
+      setDisputeReason("");
+      setMsg("Маргаан нээгдлээ.");
+
+      localStorage.setItem("driverActiveTab", "DISPUTE");
+      router.push("/driver?tab=DISPUTE");
+    } finally {
+      setLoadingFor(disputeDeliveryId, false);
+    }
+  }
+
+  // ---------------- derived ----------------
+
+  const filtered = useMemo(() => {
+    if (!user) return [];
+    return filterByTab(activeTab, deliveries, user.id);
+  }, [activeTab, deliveries, user]);
+
+  const tabCounts = useMemo(() => {
+    if (!user) return {} as Record<DriverTabId, number>;
+    return DRIVER_TABS.reduce((acc, t) => {
+      acc[t.id] = filterByTab(t.id, deliveries, user.id).length;
+      return acc;
+    }, {} as Record<DriverTabId, number>);
+  }, [deliveries, user]);
+
+  const openWithoutBid = useMemo(() => {
+    if (!user) return [];
+    return deliveries
+      .filter((d) => d.status === "OPEN" && !d.has_bid)
+      .sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+  }, [deliveries, user]);
+
+  const openWithBid = useMemo(() => {
+    if (!user) return [];
+    return deliveries
+      .filter((d) => d.status === "OPEN" && !!d.has_bid)
+      .sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+  }, [deliveries, user]);
+
+  // ---------------- UI ----------------
+
+  if (loadingUser || loading) {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center">
         <div className="text-sm text-slate-500">Ачаалж байна…</div>
@@ -603,40 +608,161 @@ export default function DriverDashboardPage() {
     );
   }
 
-  if (!user) {
+  if (!user) return null;
+
+  function logout() {
+    localStorage.removeItem("incomeUser");
+    router.replace("/");
+  }
+
+  function Card({ d, driverId }: { d: DeliveryRow; driverId: string }) {
+
+    const t = typeLabel(d.delivery_type);
+    const b = badge(d.status);
+
+    const isMine = d.chosen_driver_id === driverId;
+
+    const isOpen = d.status === "OPEN";
+    const isAssigned = isMine && d.status === "ASSIGNED";
+    const isOnRoute = isMine && d.status === "ON_ROUTE";
+    const isDelivered = isMine && d.status === "DELIVERED";
+    const canDispute = isMine && canOpenDisputeForDriver(d.status) && d.status !== "DISPUTE";
+
     return (
-      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
-        <div className="text-sm text-slate-500">Хэрэглэгч олдсонгүй.</div>
+      <div
+        className="rounded-2xl border border-slate-200 bg-white px-4 py-4 hover:bg-slate-50 transition"
+      >
+        <button
+          onClick={() => router.push(`/driver/delivery/${d.id}?tab=${activeTab}`)}
+          className="w-full text-left"
+        >
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <span className="text-xs">{t.icon}</span>
+                <div className="text-sm font-semibold text-slate-900 truncate">
+                  {t.label} #{d.id.slice(0, 6)}
+                </div>
+                <span className={`text-[10px] px-2 py-1 rounded-full border ${b.cls}`}>
+                  {b.text}
+                </span>
+              </div>
+
+              <div className="mt-2 space-y-1">
+                <div className="text-[11px] text-slate-500">Үүсгэсэн: {fmtDT(d.created_at)}</div>
+                <div className="text-xs text-slate-700">
+                  <span className="font-semibold text-slate-600">Авах:</span>{" "}
+                  {shorten(d.from_address, 80) || "—"}
+                </div>
+                <div className="text-xs text-slate-700">
+                  <span className="font-semibold text-slate-600">Хүргэх:</span>{" "}
+                  {shorten(d.to_address, 80) || "—"}
+                </div>
+                {d.note && <div className="text-[11px] text-slate-500">{shorten(d.note, 90)}</div>}
+              </div>
+            </div>
+
+            <div className="text-right shrink-0">
+              <div className="text-[11px] text-slate-500">Үнэ</div>
+              <div className="text-sm font-semibold text-slate-900">{fmtPrice(d.price_mnt)}</div>
+            </div>
+          </div>
+        </button>
+
+        {/* ✅ QUICK BUTTONS (карт дээр) */}
+        <div className="mt-3 flex flex-wrap gap-2">
+          {/* OPEN: bid */}
+          {isOpen && !d.has_bid && (
+            <button
+              onClick={() => void requestOpenDelivery(d.id)}
+              disabled={!!actLoading[d.id]}
+              className="text-[11px] px-4 py-2 rounded-full bg-emerald-600 text-white font-semibold disabled:opacity-60"
+            >
+              {actLoading[d.id] ? "Илгээж байна…" : "Авах хүсэлт"}
+            </button>
+          )}
+
+          {isOpen && !!d.has_bid && (
+            <button
+              onClick={() => void cancelMyBid(d.id)}
+              disabled={!!actLoading[d.id]}
+              className="text-[11px] px-4 py-2 rounded-full bg-slate-900 text-white font-semibold disabled:opacity-60"
+            >
+              {actLoading[d.id] ? "Цуцалж байна…" : "Хүсэлт цуцлах"}
+            </button>
+          )}
+
+          {/* ASSIGNED -> ON_ROUTE */}
+          {isAssigned && (
+            <button
+              onClick={() => void updateStatusMine(d.id, "ASSIGNED", "ON_ROUTE")}
+              disabled={!!actLoading[d.id]}
+              className="text-[11px] px-4 py-2 rounded-full bg-indigo-600 text-white font-semibold disabled:opacity-60"
+              title="ASSIGNED -> ON_ROUTE"
+            >
+              {actLoading[d.id] ? "Тэмдэглэж байна…" : "Замд гарсан"}
+            </button>
+          )}
+
+          {/* ON_ROUTE -> DELIVERED */}
+          {isOnRoute && (
+            <button
+              onClick={() => void updateStatusMine(d.id, "ON_ROUTE", "DELIVERED")}
+              disabled={!!actLoading[d.id]}
+              className="text-[11px] px-4 py-2 rounded-full bg-amber-600 text-white font-semibold disabled:opacity-60"
+              title="ON_ROUTE -> DELIVERED"
+            >
+              {actLoading[d.id] ? "Тэмдэглэж байна…" : "Хүргэлсэн"}
+            </button>
+          )}
+
+          {/* DELIVERED: confirm payment */}
+          {isDelivered && (
+            <button
+              onClick={() => void toggleDriverPayment(d.id)}
+              disabled={!!actLoading[d.id]}
+              className="text-[11px] px-4 py-2 rounded-full bg-slate-900 text-white font-semibold disabled:opacity-60"
+            >
+              {actLoading[d.id]
+                ? "Баталж байна…"
+                : d.driver_confirmed_payment
+                ? "Төлбөр баталгааг цуцлах"
+                : "Төлбөр авснаа батлах"}
+            </button>
+          )}
+
+          {/* dispute */}
+          {canDispute && (
+            <button
+              onClick={() => openDisputeModal(d.id)}
+              disabled={!!actLoading[d.id]}
+              className="text-[11px] px-4 py-2 rounded-full border border-rose-300 bg-rose-50 text-rose-700 font-semibold disabled:opacity-60"
+            >
+              Маргаан
+            </button>
+          )}
+
+          {/* detail shortcut */}
+          <button
+            onClick={() => router.push(`/driver/delivery/${d.id}?tab=${activeTab}`)}
+            className="text-[11px] px-4 py-2 rounded-full border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+          >
+            Дэлгэрэнгүй
+          </button>
+        </div>
       </div>
     );
   }
 
-  const filtered = filterByTab(activeTab, deliveries);
-
-  const tabCounts: Record<DriverTabId, number> = DRIVER_TABS.reduce(
-    (acc, t) => {
-      acc[t.id] = filterByTab(t.id, deliveries).length;
-      return acc;
-    },
-    {} as Record<DriverTabId, number>
-  );
-
-  // =================== 10. Гол UI ===================
-
   return (
     <div className="min-h-screen bg-slate-50">
       <header className="border-b border-slate-200 bg-white">
-        <div className="max-w-3xl mx-auto px-4 py-4 flex items-center justify-between gap-3">
-          <div>
-            <h1 className="text-sm font-semibold text-slate-900">
-              Жолоочийн самбар
-            </h1>
-          </div>
-
+        <div className="max-w-3xl mx-auto px-4 py-4 flex items-center justify-between">
+          <h1 className="text-sm font-semibold">Жолоочийн самбар</h1>
           <div className="flex items-center gap-2">
             <button
-              onClick={handleLogout}
-              className="text-[11px] px-3 py-1.5 rounded-full border border-slate-200 text-slate-700 hover:bg-slate-50"
+              onClick={logout}
+              className="text-[11px] px-4 py-2 rounded-full border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
             >
               Гарах
             </button>
@@ -645,54 +771,120 @@ export default function DriverDashboardPage() {
       </header>
 
       <main className="max-w-3xl mx-auto px-4 py-5 space-y-4">
-        {message && (
-          <div className="rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-2 text-xs text-emerald-800">
-            {message}
+        {msg && (
+          <div className="rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-2 text-xs">
+            {msg}
           </div>
         )}
         {error && (
-          <div className="rounded-2xl border border-rose-100 bg-rose-50 px-4 py-2 text-xs text-rose-700">
+          <div className="rounded-2xl border border-rose-100 bg-rose-50 px-4 py-2 text-xs">
             {error}
           </div>
         )}
 
+        {/* Tabs */}
         <div className="rounded-2xl border border-slate-200 bg-white px-2 py-2 flex flex-wrap gap-1">
-          {DRIVER_TABS.map((tab) => {
-            const active = tab.id === activeTab;
-            const count = tabCounts[tab.id] || 0;
-
-            return (
-              <button
-                key={tab.id}
-                type="button"
-                onClick={() => changeTab(tab.id)}
-                className={
-                  "flex items-center gap-1 text-[11px] px-3 py-1.5 rounded-full border transition " +
-                  (active
-                    ? "bg-emerald-600 text-white border-emerald-600"
-                    : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50")
-                }
-              >
-                <span>{tab.label}</span>
-                {count > 0 && (
-                  <span
-                    className={
-                      "inline-flex min-w-[18px] justify-center rounded-full px-1.5 py-0.5 text-[10px] " +
-                      (active
-                        ? "bg-white/10 text-emerald-50"
-                        : "bg-slate-100 text-slate-700")
-                    }
-                  >
-                    {count}
-                  </span>
-                )}
-              </button>
-            );
-          })}
+          {DRIVER_TABS.map((tab) => (
+            <button
+              key={tab.id}
+              onClick={() => changeTab(tab.id)}
+              className={
+                "text-[11px] px-3 py-1.5 rounded-full border " +
+                (tab.id === activeTab
+                  ? "bg-emerald-600 text-white border-emerald-600"
+                  : "bg-white text-slate-600 border-slate-200")
+              }
+            >
+              {tab.label}
+              {tabCounts[tab.id] > 0 && <span className="ml-1">({tabCounts[tab.id]})</span>}
+            </button>
+          ))}
         </div>
 
-        <section className="space-y-3">{renderList(filtered, activeTab)}</section>
+        {/* OPEN tab special grouping */}
+        {activeTab === "OPEN" ? (
+          <div className="space-y-5">
+            {openWithoutBid.length > 0 && (
+              <div className="space-y-2">
+                <p className="px-1 text-[11px] font-medium text-slate-600">Нээлттэй захиалгууд</p>
+                <div className="space-y-3">
+                  {openWithoutBid.map((d) => (
+                    <Card key={d.id} d={d} driverId={user.id} />
+
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {openWithBid.length > 0 && (
+              <div className="space-y-2">
+                <p className="px-1 text-[11px] font-medium text-slate-600">Миний өгсөн саналууд</p>
+                <div className="space-y-3">
+                  {openWithBid.map((d) => (
+                    <Card key={d.id} d={d} driverId={user.id} />
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {openWithoutBid.length === 0 && openWithBid.length === 0 && (
+              <div className="rounded-2xl border border-slate-200 bg-white px-4 py-4 text-sm text-slate-500">
+                Нээлттэй хүргэлт алга байна.
+              </div>
+            )}
+          </div>
+        ) : (
+          <section className="space-y-3">
+            {filtered.length === 0 ? (
+              <div className="rounded-2xl border border-slate-200 bg-white px-4 py-4 text-sm text-slate-500">
+                Энэ таб дээр хүргэлт алга байна.
+              </div>
+            ) : (
+              filtered.map((d) => <Card key={d.id} d={d} driverId={user.id} />)
+            )}
+          </section>
+        )}
       </main>
+
+      {/* Dispute modal */}
+      {showDispute && (
+        <div className="fixed inset-0 z-20 flex items-center justify-center bg-black/30 px-4">
+          <div className="max-w-md w-full rounded-2xl bg-white shadow-lg border border-slate-200 px-4 py-4 space-y-3">
+            <h3 className="text-sm font-semibold text-slate-900">Маргаан үүсгэх (driver)</h3>
+            <p className="text-xs text-slate-600">Товч, тодорхой шалтгаанаа бичнэ үү.</p>
+
+            <textarea
+              value={disputeReason}
+              onChange={(e) => setDisputeReason(e.target.value)}
+              rows={4}
+              className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-rose-500 focus:border-rose-500"
+              placeholder="Юу болсон талаар…"
+            />
+
+            <div className="flex items-center justify-end gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowDispute(false);
+                  setDisputeDeliveryId(null);
+                  setDisputeReason("");
+                }}
+                className="text-[11px] px-3 py-1.5 rounded-full border border-slate-200 text-slate-600 hover:bg-slate-50"
+              >
+                Болих
+              </button>
+
+              <button
+                type="button"
+                onClick={() => void submitDispute()}
+                className="text-[11px] px-3 py-1.5 rounded-full bg-rose-600 text-white hover:bg-rose-700"
+              >
+                Маргаан нээх
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
