@@ -42,7 +42,6 @@ type DeliveryDetail = {
   seller_phone?: string | null;
 };
 
-
 type DriverBidRow = {
   id: string;
   delivery_id: string;
@@ -174,6 +173,7 @@ export default function DriverDeliveryDetailPage() {
 
   // action-уудын loading
   const [requesting, setRequesting] = useState(false);
+  const [cancelingBid, setCancelingBid] = useState(false); // ✅ Шинэ: хүсэлт цуцлах loading
   const [markingOnRoute, setMarkingOnRoute] = useState(false);
   const [markingDelivered, setMarkingDelivered] = useState(false);
   const [confirmPayLoading, setConfirmPayLoading] = useState(false);
@@ -225,7 +225,7 @@ export default function DriverDeliveryDetailPage() {
       setMessage(null);
 
       // 5.1 Хүргэлтийн дэлгэрэнгүй
-            const { data, error } = await supabase
+      const { data, error } = await supabase
         .from("deliveries")
         .select(
           `
@@ -253,7 +253,6 @@ export default function DriverDeliveryDetailPage() {
         .eq("id", id)
         .maybeSingle();
 
-
       if (error) {
         console.error(error);
         setError("Хүргэлтийн мэдээлэл татахад алдаа гарлаа.");
@@ -261,7 +260,7 @@ export default function DriverDeliveryDetailPage() {
       } else if (!data) {
         setError("Ийм хүргэлт олдсонгүй.");
         setDelivery(null);
-        } else {
+      } else {
         const d = data as any;
         const detail: DeliveryDetail = {
           id: d.id,
@@ -284,7 +283,6 @@ export default function DriverDeliveryDetailPage() {
         };
         setDelivery(detail);
       }
-
 
       setLoadingDetail(false);
 
@@ -366,6 +364,42 @@ export default function DriverDeliveryDetailPage() {
     }
   }
 
+  // ✅ Шинэ: өөрийн хүсэлт (bid)-ээ цуцлах
+  async function handleCancelMyBid() {
+    if (!user || !delivery || !ownBid) return;
+
+    if (delivery.status !== "OPEN") {
+      setError("Зөвхөн нээлттэй хүргэлт дээр хүсэлтээ цуцалж болно.");
+      return;
+    }
+
+    setCancelingBid(true);
+    setError(null);
+    setMessage(null);
+
+    try {
+      const { error } = await supabase
+        .from("driver_bids")
+        .delete()
+        .eq("id", ownBid.id)
+        .eq("driver_id", user.id);
+
+      if (error) {
+        console.error(error);
+        setError("Хүсэлт цуцлахад алдаа гарлаа.");
+        return;
+      }
+
+      setOwnBid(null);
+      setMessage("Авах хүсэлт цуцлагдлаа.");
+
+      // ✅ Нээлттэй хүргэлт таб руу буцаана
+      router.push("/driver?tab=OPEN");
+    } finally {
+      setCancelingBid(false);
+    }
+  }
+
   // =================== 8. Хүргэлтийн явцын статус өөрчлөх ===================
 
   async function updateStatus(newStatus: DeliveryStatus) {
@@ -407,7 +441,10 @@ export default function DriverDeliveryDetailPage() {
 
   async function handleMarkOnRoute() {
     if (!delivery || !user) return;
-    if (delivery.status !== "ASSIGNED" || delivery.chosen_driver_id !== user.id) {
+    if (
+      delivery.status !== "ASSIGNED" ||
+      delivery.chosen_driver_id !== user.id
+    ) {
       setMessage("Эхлээд энэ хүргэлт танд оноогдсон байх ёстой.");
       return;
     }
@@ -416,7 +453,10 @@ export default function DriverDeliveryDetailPage() {
 
   async function handleMarkDelivered() {
     if (!delivery || !user) return;
-    if (delivery.status !== "ON_ROUTE" || delivery.chosen_driver_id !== user.id) {
+    if (
+      delivery.status !== "ON_ROUTE" ||
+      delivery.chosen_driver_id !== user.id
+    ) {
       setMessage("Зөвхөн замд байгаа хүргэлтийг хүргэсэн гэж тэмдэглэнэ.");
       return;
     }
@@ -449,14 +489,14 @@ export default function DriverDeliveryDetailPage() {
         delivery.seller_marked_paid &&
         delivery.status === "DELIVERED";
 
+      const closedAtNow = willBeClosed ? new Date().toISOString() : delivery.closed_at;
+
       const { error } = await supabase
         .from("deliveries")
         .update({
           driver_confirmed_payment: newDriverConfirmed,
           status: willBeClosed ? "CLOSED" : delivery.status,
-          closed_at: willBeClosed
-            ? new Date().toISOString()
-            : delivery.closed_at,
+          closed_at: closedAtNow,
         })
         .eq("id", delivery.id)
         .eq("chosen_driver_id", user.id);
@@ -471,9 +511,7 @@ export default function DriverDeliveryDetailPage() {
         ...delivery,
         driver_confirmed_payment: newDriverConfirmed,
         status: willBeClosed ? "CLOSED" : delivery.status,
-        closed_at: willBeClosed
-          ? new Date().toISOString()
-          : delivery.closed_at,
+        closed_at: closedAtNow,
       });
 
       setMessage(
@@ -488,16 +526,9 @@ export default function DriverDeliveryDetailPage() {
 
   // =================== 10. Маргаан нээх (driver тал) ===================
 
-  // Энэ хүргэлт үнэхээр энэ жолоочид оноосон эсэх
   const isThisDriverAssigned =
-    !!delivery &&
-    !!user &&
-    delivery.chosen_driver_id === user.id;
+    !!delivery && !!user && delivery.chosen_driver_id === user.id;
 
-  // Маргаан нээх боломжтой нөхцөл:
-  // - Хүргэлт энэ жолоочид оноосон
-  // - Статус нь ON_ROUTE эсвэл DELIVERED
-  // - Одоогоор DISPUTE биш
   const canOpenDispute =
     !!delivery &&
     isThisDriverAssigned &&
@@ -759,17 +790,31 @@ export default function DriverDeliveryDetailPage() {
                 Энэ хүргэлт нээлттэй байна. Та авах хүсэлт илгээвэл худалдагч
                 таныг сонгож болно.
               </p>
-              <button
-                onClick={handleRequestDelivery}
-                disabled={requesting || hasOwnBid}
-                className="text-[11px] px-4 py-2 rounded-full bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-60"
-              >
-                {hasOwnBid
-                  ? "Авах хүсэлт илгээсэн"
-                  : requesting
-                  ? "Илгээж байна…"
-                  : "Авах хүсэлт гаргах"}
-              </button>
+
+              <div className="flex flex-wrap gap-2">
+                <button
+                  onClick={handleRequestDelivery}
+                  disabled={requesting || hasOwnBid}
+                  className="text-[11px] px-4 py-2 rounded-full bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-60"
+                >
+                  {hasOwnBid
+                    ? "Авах хүсэлт илгээсэн"
+                    : requesting
+                    ? "Илгээж байна…"
+                    : "Авах хүсэлт гаргах"}
+                </button>
+
+                {/* ✅ Шинэ: хүсэлт цуцлах */}
+                {hasOwnBid && (
+                  <button
+                    onClick={handleCancelMyBid}
+                    disabled={cancelingBid}
+                    className="text-[11px] px-4 py-2 rounded-full border border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100 disabled:opacity-60"
+                  >
+                    {cancelingBid ? "Цуцалж байна…" : "Хүсэлт цуцлах"}
+                  </button>
+                )}
+              </div>
             </div>
           )}
 
@@ -856,9 +901,7 @@ export default function DriverDeliveryDetailPage() {
                         : "text-slate-700"
                     }
                   >
-                    {driverConfirmed
-                      ? "Төлбөрөө бүрэн авсан"
-                      : "Баталгаажаагүй"}
+                    {driverConfirmed ? "Төлбөрөө бүрэн авсан" : "Баталгаажаагүй"}
                   </span>
                 </p>
                 {delivery.closed_at && (
@@ -889,13 +932,11 @@ export default function DriverDeliveryDetailPage() {
             <div className="space-y-2">
               <p className="text-xs text-slate-600">
                 Хүргэлтийн явцад{" "}
-                <span className="font-semibold text-rose-700">
-                  ноцтой зөрчил
-                </span>{" "}
-                гарсан (худалдагч төлбөр өгөхөөс татгалзсан, тохирсон
-                нөхцөлийг ноцтой зөрчсөн гэх мэт) үед л{" "}
-                <span className="font-semibold">маргаан нээнэ</span>. Болсон
-                үйл явдлыг товч, тодорхой бичиж илгээнэ үү.
+                <span className="font-semibold text-rose-700">ноцтой зөрчил</span>{" "}
+                гарсан (худалдагч төлбөр өгөхөөс татгалзсан, тохирсон нөхцөлийг
+                ноцтой зөрчсөн гэх мэт) үед л{" "}
+                <span className="font-semibold">маргаан нээнэ</span>. Болсон үйл
+                явдлыг товч, тодорхой бичиж илгээнэ үү.
               </p>
               <button
                 onClick={() => setShowDisputeModal(true)}
@@ -909,9 +950,8 @@ export default function DriverDeliveryDetailPage() {
           {delivery.status === "CLOSED" && (
             <div className="border-t border-slate-100 pt-3 mt-2">
               <p className="text-xs text-slate-600">
-                Энэ хүргэлт{" "}
-                <span className="font-semibold">хаагдсан</span>. Төлбөрийн
-                тооцоо бүрэн дууссан.
+                Энэ хүргэлт <span className="font-semibold">хаагдсан</span>.
+                Төлбөрийн тооцоо бүрэн дууссан.
               </p>
             </div>
           )}

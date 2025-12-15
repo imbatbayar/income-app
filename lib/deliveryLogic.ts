@@ -1,8 +1,7 @@
 // ===================== lib/deliveryLogic.ts =====================
 // Хүргэлтийн статус, табуудын төвлөрсөн логик
-// - PAID статус / табыг ашиглахгүй
-// - Төлбөрийн тохироо нь DELIVERED + seller_marked_paid + driver_confirmed_payment
-//   нөхцлөөр CLOSED рүү шилжинэ.
+// - PAID статус / таб ашиглахгүй
+// - Төлбөрийн тохироо: DELIVERED дээр seller_marked_paid + driver_confirmed_payment хоёулаа true бол CLOSED болно.
 
 export type DeliveryStatus =
   | "OPEN"
@@ -39,21 +38,21 @@ export type DriverTabId =
   | "ASSIGNED"
   | "ON_ROUTE"
   | "DELIVERED"
-  | "DISPUTE"
-  | "CLOSED";
+  | "CLOSED"
+  | "DISPUTE";
 
 export const DRIVER_TABS: { id: DriverTabId; label: string }[] = [
   { id: "OPEN", label: "Нээлттэй" },
-  { id: "ASSIGNED", label: "Над руу оноогдсон" },
+  { id: "ASSIGNED", label: "Намайг сонгосон" },
   { id: "ON_ROUTE", label: "Замд" },
   { id: "DELIVERED", label: "Хүргэсэн" },
-  { id: "DISPUTE", label: "Маргаан" },
   { id: "CLOSED", label: "Хаагдсан" },
+  { id: "DISPUTE", label: "Маргаантай" }, // ✅ хамгийн сүүлд
 ];
 
-// ---------- ТУСЛАХ ФУНКЦУУД ----------
+// ---------- ТУСЛАХ ----------
 
-// Статусыг монголоор уншигдах текст болгох
+// Статусыг монголоор
 export function statusLabel(status: DeliveryStatus): string {
   switch (status) {
     case "OPEN":
@@ -75,15 +74,13 @@ export function statusLabel(status: DeliveryStatus): string {
   }
 }
 
-// Хаагдсан ангилалд ордог эсэх
+// Хаалттай ангилал
 export function isClosedStatus(status: DeliveryStatus): boolean {
   return status === "CLOSED" || status === "CANCELLED";
 }
 
-// Селлерийн табыг статус дээрээс таамаглах (хэрэгтэй бол ашиглаж болно)
-export function getSellerTabForStatus(
-  status: DeliveryStatus
-): SellerTabId | null {
+// Status → SellerTab
+export function getSellerTabForStatus(status: DeliveryStatus): SellerTabId {
   switch (status) {
     case "OPEN":
       return "OPEN";
@@ -98,15 +95,11 @@ export function getSellerTabForStatus(
     case "CLOSED":
     case "CANCELLED":
       return "CLOSED";
-    default:
-      return null;
   }
 }
 
-// Жолоочийн табыг статус дээрээс таамаглах
-export function getDriverTabForStatus(
-  status: DeliveryStatus
-): DriverTabId | null {
+// Status → DriverTab
+export function getDriverTabForStatus(status: DeliveryStatus): DriverTabId {
   switch (status) {
     case "OPEN":
       return "OPEN";
@@ -116,20 +109,30 @@ export function getDriverTabForStatus(
       return "ON_ROUTE";
     case "DELIVERED":
       return "DELIVERED";
-    case "DISPUTE":
-      return "DISPUTE";
     case "CLOSED":
     case "CANCELLED":
       return "CLOSED";
-    default:
-      return null;
+    case "DISPUTE":
+      return "DISPUTE";
   }
 }
 
-// ---------- Маргаан нээх боломж (жолооч тал) ----------
+// CLOSED болох ёстой эсэх (товч нэг газар)
+// ✅ зөвхөн DELIVERED дээр 2 талын төлбөр батлагдвал хаагдана
+export function shouldCloseDelivery(input: {
+  status: DeliveryStatus;
+  seller_marked_paid: boolean;
+  driver_confirmed_payment: boolean;
+}): boolean {
+  return (
+    input.status === "DELIVERED" &&
+    !!input.seller_marked_paid &&
+    !!input.driver_confirmed_payment
+  );
+}
 
+// ---------- Маргаан нээх боломж ----------
+// ✅ Жолооч тал: ON_ROUTE эсвэл DELIVERED үед (танай Driver detail логиктой тааруулсан)
 export function canOpenDisputeForDriver(status: DeliveryStatus): boolean {
-  // Жишээ логик: хүргэлт хийгдсэн (DELIVERED) үед жолооч маргаан нээж болно
-  // Хэрвээ дараа нь нарийн болгоё гэвэл энд л өөрчлөнө.
-  return status === "DELIVERED";
+  return status === "ON_ROUTE" || status === "DELIVERED";
 }

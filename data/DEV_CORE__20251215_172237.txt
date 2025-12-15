@@ -1,0 +1,4655 @@
+﻿BUNDLE TYPE : DEV_CORE
+ROOT        : F:\khurgelt
+GENERATED   : 2025-12-15 17:22:37
+==========================================================================================
+
+==========================================================================================
+[001] PATH: .\app\api\dev-review\route.ts
+CHARS: 1790
+----- BEGIN FILE 001 -----
+// app/api/dev-review/route.ts
+import { NextResponse } from "next/server";
+import OpenAI from "openai";
+
+export const runtime = "nodejs"; // OpenAI SDK-т илүү найдвартай
+
+export async function POST(req: Request) {
+  try {
+    const body = await req.json();
+    const { code, instruction } = body || {};
+
+    if (!code || !instruction) {
+      return NextResponse.json(
+        { error: "code болон instruction хоёул заавал хэрэгтэй." },
+        { status: 400 }
+      );
+    }
+
+    // API key байхгүй үед шууд ойлгомжтой хариу өгөх (алдаа цацахгүй)
+    if (!process.env.OPENAI_API_KEY) {
+      return NextResponse.json(
+        {
+          result:
+            "OPENAI_API_KEY тохируулагдаагүй байна. .env.local дотор OPENAI_API_KEY=... гэж нэмээд dev серверээ дахин асаана уу.",
+        },
+        { status: 200 }
+      );
+    }
+
+    const client = new OpenAI({
+      apiKey: process.env.OPENAI_API_KEY!,
+    });
+
+    const response = await client.chat.completions.create({
+      model: "gpt-4.1-mini",
+      temperature: 0.2,
+      messages: [
+        {
+          role: "system",
+          content:
+            "Та туршлагатай full-stack инженер. Өгөгдсөн кодыг эвдэлгүйгээр алдаа, сайжруулалт, рефактор, архитектурын зөвлөгөө өгнө.",
+        },
+        {
+          role: "user",
+          content: `
+=== АСУУЛТ / ЗААВАР ===
+${instruction}
+
+=== КОД ===
+${code}
+          `,
+        },
+      ],
+    });
+
+    const result = response.choices?.[0]?.message?.content || "No response";
+
+    return NextResponse.json({ result }, { status: 200 });
+  } catch (err) {
+    console.error("DEV-REVIEW ERROR:", err);
+    return NextResponse.json(
+      { error: "Серверийн алдаа (dev-review route)." },
+      { status: 500 }
+    );
+  }
+}
+----- END FILE 001 -----
+
+==========================================================================================
+[002] PATH: .\app\dev-console\page.tsx
+CHARS: 3953
+----- BEGIN FILE 002 -----
+"use client";
+
+import { useState } from "react";
+import projectsData from "@/data/projects.json";
+
+// projects.json доторх нэг файлын бүтэц
+type ProjectFile = {
+  path: string;
+  content: string;
+  summary?: string;
+};
+
+// projects.json бүхэлдээ
+type ProjectsMap = {
+  [project: string]: {
+    files: ProjectFile[];
+  };
+};
+
+// JSON-ыг type-тай болгох
+const projects = projectsData as ProjectsMap;
+
+export default function DevConsolePage() {
+  // Одоогоор зөвхөн "income-app" төслийг уншина
+  const files: ProjectFile[] = projects["income-app"]?.files ?? [];
+
+  const [selectedPath, setSelectedPath] = useState("");
+  const [code, setCode] = useState("");
+  const [instruction, setInstruction] = useState("");
+  const [result, setResult] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  // Файл сонгоход кодыг автоматаар харуулах
+  function handleSelect(path: string) {
+    setSelectedPath(path);
+
+    const f = files.find((x) => x.path === path);
+    if (f) {
+      setCode(f.content);
+    } else {
+      setCode("");
+    }
+  }
+
+  // Review API руу илгээх
+  async function runReview() {
+    if (!instruction.trim()) {
+      alert("Instruction хоосон байна!");
+      return;
+    }
+
+    if (!code.trim()) {
+      alert("Код хоосон байна!");
+      return;
+    }
+
+    setLoading(true);
+    setResult("");
+
+    try {
+      const res = await fetch("/api/dev-review", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          code,
+          instruction,
+        }),
+      });
+
+      const json = await res.json();
+      setResult(json.result || json.error || "No response");
+    } catch (err: any) {
+      setResult("Холболтын алдаа: " + (err?.message ?? "unknown"));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="p-6 space-y-6 max-w-5xl mx-auto">
+      <h1 className="text-2xl font-bold">AI Dev Console V1</h1>
+      <p className="text-sm text-gray-600">
+        income-app төслийн файлаа сонгоод, AI-аас кодын анализ, сайжруулалтын
+        санал авна.
+      </p>
+
+      {/* ФАЙЛ СОНГОГЧ */}
+      <div>
+        <label className="font-semibold">Файл сонгох</label>
+        <select
+          className="border p-2 rounded w-full mt-1"
+          value={selectedPath}
+          onChange={(e) => handleSelect(e.target.value)}
+        >
+          <option value="">-- Файл сонго --</option>
+          {files.map((f) => (
+            <option key={f.path} value={f.path}>
+              {f.path}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      {/* INSTRUCTION */}
+      <div>
+        <label className="font-semibold">Instruction</label>
+        <textarea
+          className="border p-2 rounded w-full h-24 mt-1"
+          placeholder='Ж: "Маргааны таб дээр notification badge нэм, логикийг тайлбарла"'
+          value={instruction}
+          onChange={(e) => setInstruction(e.target.value)}
+        />
+      </div>
+
+      {/* CODE VIEW */}
+      <div>
+        <label className="font-semibold">Код (унших хэсэг)</label>
+        <textarea
+          className="border p-2 rounded w-full h-64 mt-1 font-mono text-sm"
+          value={code}
+          onChange={(e) => setCode(e.target.value)}
+        />
+      </div>
+
+      {/* RUN BUTTON */}
+      <button
+        onClick={runReview}
+        disabled={loading}
+        className="bg-blue-600 text-white px-4 py-2 rounded disabled:opacity-60"
+      >
+        {loading ? "Анализ хийж байна..." : "AI Review ажиллуулах"}
+      </button>
+
+      {/* RESULT */}
+      <div>
+        <label className="font-semibold">Үр дүн</label>
+        <textarea
+          className="border p-2 rounded w-full h-64 mt-1 bg-gray-50 text-sm"
+          value={result}
+          readOnly
+        />
+      </div>
+    </div>
+  );
+}
+----- END FILE 002 -----
+
+==========================================================================================
+[003] PATH: 
+CHARS: 33260
+----- BEGIN FILE 003 -----
+"use client";
+
+// =================== 1. Импорт, төрлүүд ===================
+
+import { useEffect, useState } from "react";
+import { useRouter, useParams, useSearchParams } from "next/navigation";
+import { supabase } from "@/lib/supabase";
+import { DeliveryStatus } from "@/lib/deliveryLogic";
+
+type Role = "seller" | "driver";
+
+type IncomeUser = {
+  id: string;
+  role: Role;
+  name: string;
+  phone: string;
+  email: string;
+};
+
+type DeliveryDetail = {
+  id: string;
+  seller_id: string;
+  from_address: string | null;
+  to_address: string | null;
+  note: string | null;
+  status: DeliveryStatus;
+  created_at: string;
+  price_mnt: number | null;
+  delivery_type: string | null;
+  chosen_driver_id: string | null;
+
+  seller_marked_paid: boolean;
+  driver_confirmed_payment: boolean;
+  closed_at: string | null;
+
+  // 🔹 Маргааны талбарууд
+  dispute_reason?: string | null;
+  dispute_opened_at?: string | null;
+
+  // seller info
+  seller_name?: string | null;
+  seller_phone?: string | null;
+};
+
+type DriverBidRow = {
+  id: string;
+  delivery_id: string;
+  driver_id: string;
+  created_at: string;
+};
+
+type DriverOwnBid = DriverBidRow | null;
+
+// =================== 2. Туслах функцууд ===================
+
+function typeLabel(
+  deliveryType: string | null
+): { icon: string; label: string } {
+  switch (deliveryType) {
+    case "apartment":
+      return { icon: "🏙", label: "Байр" };
+    case "ger":
+      return { icon: "🏠", label: "Гэр хороолол" };
+    case "camp":
+      return { icon: "🏕", label: "Лагер" };
+    case "countryside":
+      return { icon: "🚌", label: "Орон нутаг" };
+    default:
+      return { icon: "📦", label: "Хүргэлт" };
+  }
+}
+
+function statusBadge(status: DeliveryStatus) {
+  switch (status) {
+    case "OPEN":
+      return {
+        text: "Нээлттэй",
+        className: "bg-emerald-50 text-emerald-700 border-emerald-100",
+      };
+    case "ASSIGNED":
+      return {
+        text: "Танд оноосон",
+        className: "bg-sky-50 text-sky-700 border-sky-100",
+      };
+    case "ON_ROUTE":
+      return {
+        text: "Замд",
+        className: "bg-indigo-50 text-indigo-700 border-indigo-100",
+      };
+    case "DELIVERED":
+      return {
+        text: "Хүргэсэн",
+        className: "bg-slate-900 text-white border-slate-900",
+      };
+    case "CLOSED":
+      return {
+        text: "Хаагдсан",
+        className: "bg-slate-800 text-slate-50 border-slate-800",
+      };
+    case "CANCELLED":
+      return {
+        text: "Цуцалсан",
+        className: "bg-rose-50 text-rose-700 border-rose-100",
+      };
+    case "DISPUTE":
+      return {
+        text: "Маргаан",
+        className: "bg-rose-50 text-rose-700 border-rose-100",
+      };
+    default:
+      return {
+        text: status,
+        className: "bg-slate-50 text-slate-600 border-slate-100",
+      };
+  }
+}
+
+function shorten(s: string | null, max = 120) {
+  if (!s) return "";
+  const t = s.trim();
+  if (t.length <= max) return t;
+  return t.slice(0, max).replace(/\s+$/, "") + "…";
+}
+
+function formatPrice(n: number | null) {
+  if (!n) return "Үнэ тохиролцоно";
+  return n.toLocaleString("mn-MN") + "₮";
+}
+
+function formatDateTime(iso: string | null | undefined) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return (
+    d.toLocaleDateString("mn-MN", { month: "2-digit", day: "2-digit" }) +
+    " " +
+    d.toLocaleTimeString("mn-MN", { hour: "2-digit", minute: "2-digit" })
+  );
+}
+
+function mapsUrl(addr: string | null) {
+  if (!addr) return "";
+  const q = encodeURIComponent(addr);
+  return `https://maps.google.com/?q=${q}`;
+}
+
+// =================== 3. Гол компонент ===================
+
+export default function DriverDeliveryDetailPage() {
+  const router = useRouter();
+  const params = useParams();
+  const searchParams = useSearchParams();
+
+  const idParam = (params as any)?.id;
+  const deliveryId =
+    typeof idParam === "string"
+      ? idParam
+      : Array.isArray(idParam)
+      ? idParam[0]
+      : "";
+
+  const fromTab = searchParams.get("tab");
+  const backUrl = fromTab ? `/driver?tab=${fromTab}` : "/driver";
+
+  // ---- төлөвүүд ----
+  const [user, setUser] = useState<IncomeUser | null>(null);
+  const [loadingUser, setLoadingUser] = useState(true);
+
+  const [delivery, setDelivery] = useState<DeliveryDetail | null>(null);
+  const [loadingDetail, setLoadingDetail] = useState(true);
+
+  const [ownBid, setOwnBid] = useState<DriverOwnBid>(null);
+  const [loadingBid, setLoadingBid] = useState(true);
+
+  // action-уудын loading
+  const [requesting, setRequesting] = useState(false);
+  const [cancelingBid, setCancelingBid] = useState(false); // ✅ Шинэ: хүсэлт цуцлах loading
+  const [markingOnRoute, setMarkingOnRoute] = useState(false);
+  const [markingDelivered, setMarkingDelivered] = useState(false);
+  const [confirmPayLoading, setConfirmPayLoading] = useState(false);
+
+  // Маргаан
+  const [showDisputeModal, setShowDisputeModal] = useState(false);
+  const [disputeReason, setDisputeReason] = useState("");
+  const [openingDispute, setOpeningDispute] = useState(false);
+
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  // =================== 4. Login guard ===================
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem("incomeUser");
+      if (!raw) {
+        router.replace("/");
+        return;
+      }
+      const parsed: IncomeUser = JSON.parse(raw);
+      if (parsed.role !== "driver") {
+        router.replace("/");
+        return;
+      }
+      setUser(parsed);
+      setLoadingUser(false);
+    } catch (e) {
+      console.error(e);
+      setError("Хэрэглэгчийн мэдээлэл уншихад алдаа гарлаа.");
+      setLoadingUser(false);
+    }
+  }, [router]);
+
+  // =================== 5. Хүргэлт + өөрийн bid татах ===================
+
+  useEffect(() => {
+    if (!user || !deliveryId) return;
+    void fetchDetailAndBid(user.id, deliveryId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, deliveryId]);
+
+  async function fetchDetailAndBid(driverId: string, id: string) {
+    try {
+      setLoadingDetail(true);
+      setLoadingBid(true);
+      setError(null);
+      setMessage(null);
+
+      // 5.1 Хүргэлтийн дэлгэрэнгүй
+      const { data, error } = await supabase
+        .from("deliveries")
+        .select(
+          `
+          id,
+          seller_id,
+          from_address,
+          to_address,
+          note,
+          status,
+          created_at,
+          price_mnt,
+          delivery_type,
+          chosen_driver_id,
+          seller_marked_paid,
+          driver_confirmed_payment,
+          closed_at,
+          dispute_reason,
+          dispute_opened_at,
+          seller:seller_id (
+            name,
+            phone
+          )
+        `
+        )
+        .eq("id", id)
+        .maybeSingle();
+
+      if (error) {
+        console.error(error);
+        setError("Хүргэлтийн мэдээлэл татахад алдаа гарлаа.");
+        setDelivery(null);
+      } else if (!data) {
+        setError("Ийм хүргэлт олдсонгүй.");
+        setDelivery(null);
+      } else {
+        const d = data as any;
+        const detail: DeliveryDetail = {
+          id: d.id,
+          seller_id: d.seller_id,
+          from_address: d.from_address,
+          to_address: d.to_address,
+          note: d.note,
+          status: d.status as DeliveryStatus,
+          created_at: d.created_at,
+          price_mnt: d.price_mnt,
+          delivery_type: d.delivery_type,
+          chosen_driver_id: d.chosen_driver_id,
+          seller_marked_paid: !!d.seller_marked_paid,
+          driver_confirmed_payment: !!d.driver_confirmed_payment,
+          closed_at: d.closed_at,
+          dispute_reason: d.dispute_reason ?? null,
+          dispute_opened_at: d.dispute_opened_at ?? null,
+          seller_name: d.seller?.name ?? null,
+          seller_phone: d.seller?.phone ?? null,
+        };
+        setDelivery(detail);
+      }
+
+      setLoadingDetail(false);
+
+      // 5.2 Энэ хүргэлт дээрх өөрийн bid байгаа эсэх
+      const { data: bidData, error: bidError } = await supabase
+        .from("driver_bids")
+        .select("id, delivery_id, driver_id, created_at")
+        .eq("delivery_id", id)
+        .eq("driver_id", driverId)
+        .maybeSingle();
+
+      if (bidError && bidError.code !== "PGRST116") {
+        console.error("BID LOAD ERROR:", bidError);
+      }
+
+      if (!bidError && bidData) {
+        setOwnBid(bidData as DriverBidRow);
+      } else {
+        setOwnBid(null);
+      }
+
+      setLoadingBid(false);
+    } catch (e) {
+      console.error(e);
+      setError("Мэдээлэл татах явцад алдаа гарлаа.");
+      setLoadingDetail(false);
+      setLoadingBid(false);
+    }
+  }
+
+  // =================== 6. Гарах ===================
+
+  function handleLogout() {
+    if (typeof window !== "undefined") {
+      window.localStorage.removeItem("incomeUser");
+    }
+    router.push("/");
+  }
+
+  // =================== 7. Авах хүсэлт илгээх (OPEN үед) ===================
+
+  async function handleRequestDelivery() {
+    if (!user || !delivery) return;
+
+    if (delivery.status !== "OPEN") {
+      setMessage("Зөвхөн нээлттэй хүргэлт дээр авах хүсэлт гаргаж болно.");
+      return;
+    }
+
+    if (ownBid) {
+      setMessage("Та аль хэдийн энэ хүргэлт дээр авах хүсэлт илгээсэн байна.");
+      return;
+    }
+
+    setRequesting(true);
+    setError(null);
+    setMessage(null);
+
+    try {
+      const { data, error } = await supabase
+        .from("driver_bids")
+        .insert({
+          delivery_id: delivery.id,
+          driver_id: user.id,
+        })
+        .select()
+        .single();
+
+      if (error) {
+        console.error(error);
+        setError("Авах хүсэлт илгээхэд алдаа гарлаа.");
+        return;
+      }
+
+      setOwnBid(data as DriverBidRow);
+      setMessage("Авах хүсэлт амжилттай илгээгдлээ.");
+    } finally {
+      setRequesting(false);
+    }
+  }
+
+  // ✅ Шинэ: өөрийн хүсэлт (bid)-ээ цуцлах
+  async function handleCancelMyBid() {
+    if (!user || !delivery || !ownBid) return;
+
+    if (delivery.status !== "OPEN") {
+      setError("Зөвхөн нээлттэй хүргэлт дээр хүсэлтээ цуцалж болно.");
+      return;
+    }
+
+    setCancelingBid(true);
+    setError(null);
+    setMessage(null);
+
+    try {
+      const { error } = await supabase
+        .from("driver_bids")
+        .delete()
+        .eq("id", ownBid.id)
+        .eq("driver_id", user.id);
+
+      if (error) {
+        console.error(error);
+        setError("Хүсэлт цуцлахад алдаа гарлаа.");
+        return;
+      }
+
+      setOwnBid(null);
+      setMessage("Авах хүсэлт цуцлагдлаа.");
+
+      // ✅ Нээлттэй хүргэлт таб руу буцаана
+      router.push("/driver?tab=OPEN");
+    } finally {
+      setCancelingBid(false);
+    }
+  }
+
+  // =================== 8. Хүргэлтийн явцын статус өөрчлөх ===================
+
+  async function updateStatus(newStatus: DeliveryStatus) {
+    if (!user || !delivery) return;
+
+    setError(null);
+    setMessage(null);
+
+    let setter: (v: boolean) => void = () => {};
+    if (newStatus === "ON_ROUTE") setter = setMarkingOnRoute;
+    if (newStatus === "DELIVERED") setter = setMarkingDelivered;
+
+    setter(true);
+
+    try {
+      const { error } = await supabase
+        .from("deliveries")
+        .update({ status: newStatus })
+        .eq("id", delivery.id)
+        .eq("chosen_driver_id", user.id);
+
+      if (error) {
+        console.error(error);
+        setError("Статус өөрчлөхөд алдаа гарлаа.");
+        return;
+      }
+
+      setDelivery({ ...delivery, status: newStatus });
+
+      if (newStatus === "ON_ROUTE") {
+        setMessage("Барааг авч, хүргэлтэд гарлаа гэж тэмдэглэлээ.");
+      } else if (newStatus === "DELIVERED") {
+        setMessage("Хүргэлтийг амжилттай дууссан гэж тэмдэглэлээ.");
+      }
+    } finally {
+      setter(false);
+    }
+  }
+
+  async function handleMarkOnRoute() {
+    if (!delivery || !user) return;
+    if (
+      delivery.status !== "ASSIGNED" ||
+      delivery.chosen_driver_id !== user.id
+    ) {
+      setMessage("Эхлээд энэ хүргэлт танд оноогдсон байх ёстой.");
+      return;
+    }
+    await updateStatus("ON_ROUTE");
+  }
+
+  async function handleMarkDelivered() {
+    if (!delivery || !user) return;
+    if (
+      delivery.status !== "ON_ROUTE" ||
+      delivery.chosen_driver_id !== user.id
+    ) {
+      setMessage("Зөвхөн замд байгаа хүргэлтийг хүргэсэн гэж тэмдэглэнэ.");
+      return;
+    }
+    await updateStatus("DELIVERED");
+  }
+
+  // =================== 9. Төлбөр авснаа батлах ===================
+
+  async function handleConfirmPayment() {
+    if (!delivery || !user) return;
+
+    if (delivery.chosen_driver_id !== user.id) {
+      setError("Зөвхөн өөрт оноосон хүргэлт дээр төлбөр батална.");
+      return;
+    }
+
+    if (!delivery.seller_marked_paid) {
+      setError("Худалдагч төлбөр шилжүүлсэн гэж тэмдэглэсний дараа батална.");
+      return;
+    }
+
+    setConfirmPayLoading(true);
+    setError(null);
+    setMessage(null);
+
+    try {
+      const newDriverConfirmed = !delivery.driver_confirmed_payment;
+      const willBeClosed =
+        newDriverConfirmed &&
+        delivery.seller_marked_paid &&
+        delivery.status === "DELIVERED";
+
+      const closedAtNow = willBeClosed ? new Date().toISOString() : delivery.closed_at;
+
+      const { error } = await supabase
+        .from("deliveries")
+        .update({
+          driver_confirmed_payment: newDriverConfirmed,
+          status: willBeClosed ? "CLOSED" : delivery.status,
+          closed_at: closedAtNow,
+        })
+        .eq("id", delivery.id)
+        .eq("chosen_driver_id", user.id);
+
+      if (error) {
+        console.error(error);
+        setError("Төлбөр авснаа батлахад алдаа гарлаа.");
+        return;
+      }
+
+      setDelivery({
+        ...delivery,
+        driver_confirmed_payment: newDriverConfirmed,
+        status: willBeClosed ? "CLOSED" : delivery.status,
+        closed_at: closedAtNow,
+      });
+
+      setMessage(
+        newDriverConfirmed
+          ? "Төлбөрөө бүрэн авсан гэж тэмдэглэлээ."
+          : "Төлбөрөө баталгаажаагүй гэж заслаа."
+      );
+    } finally {
+      setConfirmPayLoading(false);
+    }
+  }
+
+  // =================== 10. Маргаан нээх (driver тал) ===================
+
+  const isThisDriverAssigned =
+    !!delivery && !!user && delivery.chosen_driver_id === user.id;
+
+  const canOpenDispute =
+    !!delivery &&
+    isThisDriverAssigned &&
+    delivery.status !== "DISPUTE" &&
+    (delivery.status === "ON_ROUTE" || delivery.status === "DELIVERED");
+
+  async function handleOpenDisputeConfirm() {
+    if (!delivery || !user) return;
+
+    if (!isThisDriverAssigned) {
+      setError("Зөвхөн өөрт оноосон хүргэлт дээр маргаан нээнэ.");
+      return;
+    }
+
+    if (!canOpenDispute) {
+      setError("Энэ хүргэлт дээр маргаан нээх боломжгүй төлөв байна.");
+      return;
+    }
+
+    const reason = disputeReason.trim();
+    if (!reason) {
+      setError("Маргааны шалтгаанаа товчхон бичнэ үү.");
+      return;
+    }
+
+    setOpeningDispute(true);
+    setError(null);
+    setMessage(null);
+
+    try {
+      const { error } = await supabase
+        .from("deliveries")
+        .update({
+          status: "DISPUTE",
+          dispute_reason: reason,
+          dispute_opened_at: new Date().toISOString(),
+        })
+        .eq("id", delivery.id)
+        .eq("chosen_driver_id", user.id);
+
+      if (error) {
+        console.error(error);
+        setError("Маргаан нээхэд алдаа гарлаа.");
+        return;
+      }
+
+      setDelivery({
+        ...delivery,
+        status: "DISPUTE",
+        dispute_reason: reason,
+      });
+
+      setShowDisputeModal(false);
+      setDisputeReason("");
+      setMessage("Маргаан амжилттай нээгдлээ.");
+    } finally {
+      setOpeningDispute(false);
+    }
+  }
+
+  // =================== 11. Ачаалалт / алдаа ===================
+
+  if (loadingUser || loadingDetail || loadingBid) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+        <div className="text-sm text-slate-500">Ачаалж байна…</div>
+      </div>
+    );
+  }
+
+  if (!user || !delivery) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+        <div className="text-sm text-slate-500">
+          Хүргэлтийн мэдээлэл олдсонгүй.
+        </div>
+      </div>
+    );
+  }
+
+  const t = typeLabel(delivery.delivery_type);
+  const sb = statusBadge(delivery.status);
+
+  const sellerPaid = !!delivery.seller_marked_paid;
+  const driverConfirmed = !!delivery.driver_confirmed_payment;
+
+  const hasOwnBid = !!ownBid;
+  const isOpen = delivery.status === "OPEN";
+  const isAssigned = delivery.status === "ASSIGNED" && isThisDriverAssigned;
+  const isOnRoute = delivery.status === "ON_ROUTE" && isThisDriverAssigned;
+  const isDelivered = delivery.status === "DELIVERED" && isThisDriverAssigned;
+
+  // =================== 12. Гол UI ===================
+
+  return (
+    <div className="min-h-screen bg-slate-50">
+      {/* Толгой */}
+      <header className="border-b border-slate-200 bg-white">
+        <div className="max-w-3xl mx-auto px-4 py-4 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            {/* Mobile back товч */}
+            <button
+              onClick={() => router.push(backUrl)}
+              className="inline-flex sm:hidden items-center justify-center h-8 w-8 rounded-full border border-slate-200 text-slate-600 hover:bg-slate-50"
+            >
+              ←
+            </button>
+
+            <div>
+              <div className="inline-flex items-center gap-1 rounded-full border border-slate-100 bg-slate-50 px-2 py-0.5">
+                <span className="text-xs text-slate-600">
+                  Жолоочийн дэлгэрэнгүй
+                </span>
+              </div>
+              <div className="mt-1 flex items-center gap-2">
+                <span className="text-sm font-semibold text-slate-900">
+                  #{delivery.id.slice(0, 6)}
+                </span>
+                <span
+                  className={
+                    "inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium " +
+                    sb.className
+                  }
+                >
+                  {sb.text}
+                </span>
+              </div>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Үүсгэсэн: {formatDateTime(delivery.created_at)}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            {/* Desktop back товч */}
+            <button
+              onClick={() => router.push(backUrl)}
+              className="hidden sm:inline-flex text-[11px] px-3 py-1.5 rounded-full border border-slate-200 text-slate-600 hover:bg-slate-50"
+            >
+              ← Буцах
+            </button>
+            {/* Гарах */}
+            <button
+              onClick={handleLogout}
+              className="text-[11px] px-3 py-1.5 rounded-full border border-slate-200 text-slate-700 hover:bg-slate-50"
+            >
+              Гарах
+            </button>
+          </div>
+        </div>
+      </header>
+
+      {/* Агуулга */}
+      <main className="max-w-3xl mx-auto px-4 py-5 space-y-4">
+        {/* Статус баннерууд */}
+        {delivery.status === "DISPUTE" && (
+          <div className="rounded-2xl border border-rose-100 bg-rose-50 px-4 py-3 text-xs text-rose-800">
+            Энэ хүргэлт дээр <span className="font-semibold">маргаан</span>{" "}
+            нээгдсэн. Системийн админ асуудлыг шалгаж байгаа.
+          </div>
+        )}
+
+        {message && (
+          <div className="rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-2 text-xs text-emerald-800">
+            {message}
+          </div>
+        )}
+
+        {error && (
+          <div className="rounded-2xl border border-rose-100 bg-rose-50 px-4 py-2 text-xs text-rose-700">
+            {error}
+          </div>
+        )}
+
+        {/* Карт 1 – Хаяг, юу хүргэх, Maps линк */}
+        <section className="rounded-2xl border border-slate-200 bg-white px-4 py-4 space-y-3">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 text-xs">
+              <span>{t.icon}</span>
+              <span className="font-medium text-slate-800">{t.label}</span>
+            </div>
+            <div className="text-sm font-semibold text-slate-900">
+              {formatPrice(delivery.price_mnt)}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs text-slate-600">
+            <div>
+              <div className="text-[11px] font-semibold text-slate-500">
+                АВАХ ХАЯГ
+              </div>
+              <p className="mt-1">{shorten(delivery.from_address)}</p>
+              {delivery.from_address && (
+                <a
+                  href={mapsUrl(delivery.from_address)}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="mt-1 inline-flex text-[11px] text-sky-600 hover:underline"
+                >
+                  Google Maps дээр харах
+                </a>
+              )}
+            </div>
+            <div>
+              <div className="text-[11px] font-semibold text-slate-500">
+                ХҮРГЭХ ХАЯГ
+              </div>
+              <p className="mt-1">{shorten(delivery.to_address)}</p>
+              {delivery.to_address && (
+                <a
+                  href={mapsUrl(delivery.to_address)}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="mt-1 inline-flex text-[11px] text-sky-600 hover:underline"
+                >
+                  Google Maps дээр харах
+                </a>
+              )}
+            </div>
+          </div>
+
+          {delivery.note && (
+            <div className="pt-2 border-t border-slate-100">
+              <div className="text-[11px] font-semibold text-slate-500">
+                ЮУ ХҮРГЭХ ВЭ?
+              </div>
+              <p className="mt-1 text-xs text-slate-700">{delivery.note}</p>
+            </div>
+          )}
+        </section>
+
+        {/* Карт 2 – Худалдагчийн мэдээлэл */}
+        <section className="rounded-2xl border border-slate-200 bg-white px-4 py-4 space-y-2">
+          <h2 className="text-sm font-semibold text-slate-900">
+            Худалдагчийн мэдээлэл
+          </h2>
+          <div className="space-y-1 text-xs text-slate-700">
+            <p>
+              <span className="font-semibold">Нэр:</span>{" "}
+              {delivery.seller_name || "Бүртгэгдээгүй"}
+            </p>
+            <p>
+              <span className="font-semibold">Утас:</span>{" "}
+              {delivery.seller_phone || "утасны дугаар бүртгэгдээгүй"}
+            </p>
+          </div>
+        </section>
+
+        {/* Карт 3 – Жолоочийн үйлдлүүд */}
+        <section className="rounded-2xl border border-slate-200 bg-white px-4 py-4 space-y-3">
+          <h2 className="text-sm font-semibold text-slate-900">
+            Хүргэлтийн явц, шийдвэр (жолооч)
+          </h2>
+
+          {/* 3.1 – Нээлттэй үед: Авах хүсэлт */}
+          {isOpen && (
+            <div className="border-b border-slate-100 pb-3 mb-2 space-y-2">
+              <p className="text-xs text-slate-600">
+                Энэ хүргэлт нээлттэй байна. Та авах хүсэлт илгээвэл худалдагч
+                таныг сонгож болно.
+              </p>
+
+              <div className="flex flex-wrap gap-2">
+                <button
+                  onClick={handleRequestDelivery}
+                  disabled={requesting || hasOwnBid}
+                  className="text-[11px] px-4 py-2 rounded-full bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-60"
+                >
+                  {hasOwnBid
+                    ? "Авах хүсэлт илгээсэн"
+                    : requesting
+                    ? "Илгээж байна…"
+                    : "Авах хүсэлт гаргах"}
+                </button>
+
+                {/* ✅ Шинэ: хүсэлт цуцлах */}
+                {hasOwnBid && (
+                  <button
+                    onClick={handleCancelMyBid}
+                    disabled={cancelingBid}
+                    className="text-[11px] px-4 py-2 rounded-full border border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100 disabled:opacity-60"
+                  >
+                    {cancelingBid ? "Цуцалж байна…" : "Хүсэлт цуцлах"}
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* 3.2 – Танд оноосон / Замд / Хүргэсэн үеийн товчнууд */}
+          {(isAssigned || isOnRoute || isDelivered) && (
+            <div className="border-b border-slate-100 pb-3 mb-2 space-y-2">
+              {isAssigned && (
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-xs text-slate-600">
+                    Энэ хүргэлт танд оноосон байна. Барааг авсан үед{" "}
+                    <span className="font-medium">“Барааг авлаа”</span> гэж
+                    тэмдэглэнэ.
+                  </p>
+                  <button
+                    onClick={handleMarkOnRoute}
+                    disabled={markingOnRoute}
+                    className="text-[11px] px-4 py-2 rounded-full bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-60"
+                  >
+                    {markingOnRoute ? "Тэмдэглэж байна…" : "Барааг авлаа"}
+                  </button>
+                </div>
+              )}
+
+              {isOnRoute && (
+                <div className="space-y-2">
+                  <p className="text-xs text-slate-600">
+                    Та барааг авсан, замд явж байна. Хүргэлт амжилттай дууссан
+                    үед{" "}
+                    <span className="font-medium">“Хүргэлт хийсэн”</span> гэж
+                    тэмдэглэнэ. Хэрвээ асуудал гарвал (хаяг олдохгүй, төлбөр
+                    өгөхгүй гэх мэт) дараа нь{" "}
+                    <span className="font-medium">маргаан нээх</span>{" "}
+                    боломжтой.
+                  </p>
+                  <button
+                    onClick={handleMarkDelivered}
+                    disabled={markingDelivered}
+                    className="text-[11px] px-4 py-2 rounded-full bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-60"
+                  >
+                    {markingDelivered ? "Тэмдэглэж байна…" : "Хүргэлт хийсэн"}
+                  </button>
+                </div>
+              )}
+
+              {isDelivered && (
+                <p className="text-xs text-slate-600">
+                  Та энэ хүргэлтийг{" "}
+                  <span className="font-semibold">хүргэсэн</span> гэж
+                  тэмдэглэсэн. Худалдагч төлбөрөө шилжүүлсэн гэж тэмдэглэсний
+                  дараа “Төлбөрөө авсан” гэж баталж, хүргэлт хаагдана.
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* 3.3 – Төлбөрийн хэсэг */}
+          {(isDelivered || delivery.status === "CLOSED") && (
+            <div className="border-b border-slate-100 pb-3 mb-2 space-y-2">
+              <p className="text-xs text-slate-600">
+                Худалдагч төлбөр төлснөө тэмдэглэсэн эсэх, та төлбөрөө бүрэн
+                авсан эсэхийг доор харуулна.
+              </p>
+              <div className="space-y-1 text-[11px] text-slate-500">
+                <p>
+                  Худалдагч:{" "}
+                  <span
+                    className={
+                      sellerPaid
+                        ? "text-emerald-600 font-semibold"
+                        : "text-slate-700"
+                    }
+                  >
+                    {sellerPaid
+                      ? "Жолоочид мөнгөө шилжүүлсэн"
+                      : "Мөнгөө шилжүүлсэн гэж тэмдэглээгүй"}
+                  </span>
+                </p>
+                <p>
+                  Жолооч (та):{" "}
+                  <span
+                    className={
+                      driverConfirmed
+                        ? "text-emerald-600 font-semibold"
+                        : "text-slate-700"
+                    }
+                  >
+                    {driverConfirmed ? "Төлбөрөө бүрэн авсан" : "Баталгаажаагүй"}
+                  </span>
+                </p>
+                {delivery.closed_at && (
+                  <p className="text-[11px] text-slate-400">
+                    Хаагдсан: {formatDateTime(delivery.closed_at)}
+                  </p>
+                )}
+              </div>
+
+              {isDelivered && (
+                <button
+                  onClick={handleConfirmPayment}
+                  disabled={confirmPayLoading}
+                  className="mt-1 text-[11px] px-4 py-2 rounded-full bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-60"
+                >
+                  {confirmPayLoading
+                    ? "Тэмдэглэж байна…"
+                    : driverConfirmed
+                    ? "Төлбөр авсан гэж засах"
+                    : "Төлбөрөө авсан гэж тэмдэглэх"}
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* 3.4 – Маргаан үүсгэх (жолооч тал) */}
+          {canOpenDispute && (
+            <div className="space-y-2">
+              <p className="text-xs text-slate-600">
+                Хүргэлтийн явцад{" "}
+                <span className="font-semibold text-rose-700">ноцтой зөрчил</span>{" "}
+                гарсан (худалдагч төлбөр өгөхөөс татгалзсан, тохирсон нөхцөлийг
+                ноцтой зөрчсөн гэх мэт) үед л{" "}
+                <span className="font-semibold">маргаан нээнэ</span>. Болсон үйл
+                явдлыг товч, тодорхой бичиж илгээнэ үү.
+              </p>
+              <button
+                onClick={() => setShowDisputeModal(true)}
+                className="text-[11px] px-4 py-2 rounded-full border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100"
+              >
+                Маргаан үүсгэх
+              </button>
+            </div>
+          )}
+
+          {delivery.status === "CLOSED" && (
+            <div className="border-t border-slate-100 pt-3 mt-2">
+              <p className="text-xs text-slate-600">
+                Энэ хүргэлт <span className="font-semibold">хаагдсан</span>.
+                Төлбөрийн тооцоо бүрэн дууссан.
+              </p>
+            </div>
+          )}
+        </section>
+
+        {/* Маргаан modal */}
+        {showDisputeModal && (
+          <div className="fixed inset-0 z-20 flex items-center justify-center bg-black/30 px-4">
+            <div className="max-w-md w-full rounded-2xl bg-white shadow-lg border border-slate-200 px-4 py-4 space-y-3">
+              <h3 className="text-sm font-semibold text-slate-900">
+                Маргаан үүсгэх (жолооч)
+              </h3>
+              <p className="text-xs text-slate-600">
+                Худалдагчтай ноцтой асуудал гарсан (төлбөр өгөхөөс татгалзсан,
+                тохирсон нөхцөлийг зөрчсөн гэх мэт) үед л маргаан нээнэ. Болсон
+                нөхцөл байдлыг товч, тодорхой бичнэ үү.
+              </p>
+              <textarea
+                value={disputeReason}
+                onChange={(e) => setDisputeReason(e.target.value)}
+                rows={4}
+                className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-rose-500 focus:border-rose-500"
+                placeholder="Юу болсон талаар товчхон, тодорхой бичнэ үү…"
+              />
+              <div className="flex items-center justify-end gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setShowDisputeModal(false)}
+                  disabled={openingDispute}
+                  className="text-[11px] px-3 py-1.5 rounded-full border border-slate-200 text-slate-600 hover:bg-slate-50"
+                >
+                  Болих
+                </button>
+                <button
+                  type="button"
+                  onClick={handleOpenDisputeConfirm}
+                  disabled={openingDispute}
+                  className="text-[11px] px-3 py-1.5 rounded-full bg-rose-600 text-white hover:bg-rose-700 disabled:opacity-60"
+                >
+                  {openingDispute ? "Илгээж байна…" : "Маргаан нээх"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </main>
+    </div>
+  );
+}
+----- END FILE 003 -----
+
+==========================================================================================
+[004] PATH: .\app\driver\page.tsx
+CHARS: 22643
+----- BEGIN FILE 004 -----
+"use client";
+
+// =================== 1. Импорт, төрлүүд ===================
+
+import { useEffect, useMemo, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { supabase } from "@/lib/supabase";
+import { DeliveryStatus } from "@/lib/deliveryLogic";
+
+type Role = "seller" | "driver";
+
+type IncomeUser = {
+  id: string;
+  role: Role;
+  name: string;
+  phone: string;
+  email: string;
+};
+
+// ✅ PAID таб байхгүй. DISPUTE хамгийн сүүлд.
+type DriverTabId =
+  | "OPEN"
+  | "ASSIGNED"
+  | "ON_ROUTE"
+  | "DELIVERED"
+  | "CLOSED"
+  | "DISPUTE";
+
+type DeliveryRow = {
+  id: string;
+  from_address: string | null;
+  to_address: string | null;
+  note: string | null;
+  status: DeliveryStatus;
+  created_at: string;
+  price_mnt: number | null;
+  delivery_type: string | null;
+  seller_marked_paid: boolean;
+  driver_confirmed_payment: boolean;
+  chosen_driver_id: string | null;
+
+  // OPEN таб дээр миний хүсэлт (bid) байгаа эсэх
+  hasBid: boolean;
+};
+
+// Драйверийн табууд (✅ DISPUTE хамгийн сүүлд)
+const DRIVER_TABS: { id: DriverTabId; label: string }[] = [
+  { id: "OPEN", label: "Нээлттэй" },
+  { id: "ASSIGNED", label: "Намайг сонгосон" },
+  { id: "ON_ROUTE", label: "Замд" },
+  { id: "DELIVERED", label: "Хүргэсэн" },
+  { id: "CLOSED", label: "Хаагдсан" },
+  { id: "DISPUTE", label: "Маргаантай" },
+];
+
+const TAB_IDS: DriverTabId[] = DRIVER_TABS.map((t) => t.id);
+
+// =================== 2. Туслах функцууд ===================
+
+function typeLabel(
+  deliveryType: string | null
+): { icon: string; label: string } {
+  switch (deliveryType) {
+    case "apartment":
+      return { icon: "🏙", label: "Байр" };
+    case "ger":
+      return { icon: "🏠", label: "Гэр хороолол" };
+    case "camp":
+      return { icon: "🏕", label: "Лагер" };
+    case "countryside":
+      return { icon: "🚌", label: "Орон нутаг" };
+    default:
+      return { icon: "📦", label: "Хүргэлт" };
+  }
+}
+
+function statusBadge(status: DeliveryStatus) {
+  switch (status) {
+    case "OPEN":
+      return {
+        text: "Нээлттэй",
+        className: "bg-emerald-50 text-emerald-700 border-emerald-100",
+      };
+    case "ASSIGNED":
+      return {
+        text: "Танд оноосон",
+        className: "bg-sky-50 text-sky-700 border-sky-100",
+      };
+    case "ON_ROUTE":
+      return {
+        text: "Замд",
+        className: "bg-indigo-50 text-indigo-700 border-indigo-100",
+      };
+    case "DELIVERED":
+      return {
+        text: "Хүргэсэн",
+        className: "bg-slate-900 text-white border-slate-900",
+      };
+    case "CLOSED":
+      return {
+        text: "Хаагдсан",
+        className: "bg-slate-800 text-slate-50 border-slate-800",
+      };
+    case "CANCELLED":
+      return {
+        text: "Цуцалсан",
+        className: "bg-rose-50 text-rose-700 border-rose-100",
+      };
+    case "DISPUTE":
+      return {
+        text: "Маргаан",
+        className: "bg-rose-50 text-rose-700 border-rose-100",
+      };
+    default:
+      return {
+        text: status,
+        className: "bg-slate-50 text-slate-600 border-slate-100",
+      };
+  }
+}
+
+function shorten(s: string | null, max = 110) {
+  if (!s) return "";
+  const t = s.trim();
+  if (t.length <= max) return t;
+  return t.slice(0, max).replace(/\s+$/, "") + "…";
+}
+
+function formatPrice(n: number | null) {
+  if (!n) return "Үнэ тохиролцоно";
+  return n.toLocaleString("mn-MN") + "₮";
+}
+
+function formatDateTime(iso: string) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return (
+    d.toLocaleDateString("mn-MN", { month: "2-digit", day: "2-digit" }) +
+    " " +
+    d.toLocaleTimeString("mn-MN", { hour: "2-digit", minute: "2-digit" })
+  );
+}
+
+// Табыгаар filter хийх
+function filterByTab(tab: DriverTabId, items: DeliveryRow[]): DeliveryRow[] {
+  return items.filter((d) => {
+    switch (tab) {
+      case "OPEN":
+        return d.status === "OPEN";
+      case "ASSIGNED":
+        return d.status === "ASSIGNED";
+      case "ON_ROUTE":
+        return d.status === "ON_ROUTE";
+      case "DELIVERED":
+        return d.status === "DELIVERED";
+      case "CLOSED":
+        return d.status === "CLOSED";
+      case "DISPUTE":
+        return d.status === "DISPUTE";
+      default:
+        return true;
+    }
+  });
+}
+
+// =================== 3. Гол компонент ===================
+
+export default function DriverDashboardPage() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+
+  const urlTab = searchParams.get("tab");
+  const urlTabId = useMemo(() => {
+    if (urlTab && TAB_IDS.includes(urlTab as DriverTabId)) {
+      return urlTab as DriverTabId;
+    }
+    return null;
+  }, [urlTab]);
+
+  const [user, setUser] = useState<IncomeUser | null>(null);
+  const [loadingUser, setLoadingUser] = useState(true);
+
+  const [deliveries, setDeliveries] = useState<DeliveryRow[]>([]);
+  const [loadingList, setLoadingList] = useState(true);
+
+  const [activeTab, setActiveTab] = useState<DriverTabId>("OPEN");
+
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  // =================== 4. Login guard ===================
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem("incomeUser");
+      if (!raw) {
+        router.replace("/");
+        return;
+      }
+      const parsed: IncomeUser = JSON.parse(raw);
+      if (parsed.role !== "driver") {
+        router.replace("/");
+        return;
+      }
+      setUser(parsed);
+      setLoadingUser(false);
+    } catch (e) {
+      console.error(e);
+      setError("Хэрэглэгчийн мэдээлэл уншихад алдаа гарлаа.");
+      setLoadingUser(false);
+    }
+  }, [router]);
+
+  // =================== 5. Табын эхний утга (URL / localStorage) ===================
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    if (urlTabId) {
+      setActiveTab(urlTabId);
+      window.localStorage.setItem("driverActiveTab", urlTabId);
+      return;
+    }
+
+    const stored = window.localStorage.getItem("driverActiveTab");
+    if (stored && TAB_IDS.includes(stored as DriverTabId)) {
+      setActiveTab(stored as DriverTabId);
+    }
+  }, [urlTabId]);
+
+  function changeTab(tab: DriverTabId) {
+    setActiveTab(tab);
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem("driverActiveTab", tab);
+    }
+    router.push(`/driver?tab=${tab}`);
+  }
+
+  // =================== 6. Хүргэлтийн жагсаалт татах ===================
+
+  async function fetchDeliveries(driverId: string) {
+    try {
+      setLoadingList(true);
+      setError(null);
+      setMessage(null);
+
+      // 6.1 Нээлттэй бүх хүргэлт
+      const { data: openData, error: openError } = await supabase
+        .from("deliveries")
+        .select(
+          `
+          id,
+          from_address,
+          to_address,
+          note,
+          status,
+          created_at,
+          price_mnt,
+          delivery_type,
+          seller_marked_paid,
+          driver_confirmed_payment,
+          chosen_driver_id
+        `
+        )
+        .eq("status", "OPEN")
+        .order("created_at", { ascending: false });
+
+      if (openError) console.error(openError);
+
+      // 6.2 Энэ жолоочид оноогдсон / өмнө нь хийж байсан бүх хүргэлт
+      const { data: mineData, error: mineError } = await supabase
+        .from("deliveries")
+        .select(
+          `
+          id,
+          from_address,
+          to_address,
+          note,
+          status,
+          created_at,
+          price_mnt,
+          delivery_type,
+          seller_marked_paid,
+          driver_confirmed_payment,
+          chosen_driver_id
+        `
+        )
+        .eq("chosen_driver_id", driverId)
+        .order("created_at", { ascending: false });
+
+      if (mineError) console.error(mineError);
+
+      const openRows = (openData || []) as any[];
+      const mineRows = (mineData || []) as any[];
+
+      // 6.3 Дубликатгүй нэгтгэх
+      const mergedMap = new Map<string, any>();
+      for (const d of [...openRows, ...mineRows]) {
+        if (!mergedMap.has(d.id)) mergedMap.set(d.id, d);
+      }
+      const merged = Array.from(mergedMap.values());
+
+      // 6.4 Энэ жолоочийн илгээсэн бүх хүсэлтүүд
+      const { data: bidData, error: bidError } = await supabase
+        .from("driver_bids")
+        .select("delivery_id")
+        .eq("driver_id", driverId);
+
+      if (bidError) console.error(bidError);
+
+      const bidSet = new Set<string>(
+        (bidData || []).map((b: any) => b.delivery_id as string)
+      );
+
+      // 6.5 Map (PAID таарах ёсгүй, гэхдээ хуучин дата байвал DELIVERED болгож normalize)
+      const rows: DeliveryRow[] = merged.map((d: any) => ({
+        id: d.id,
+        from_address: d.from_address,
+        to_address: d.to_address,
+        note: d.note,
+        status: (d.status === "PAID" ? "DELIVERED" : d.status) as DeliveryStatus,
+        created_at: d.created_at,
+        price_mnt: d.price_mnt,
+        delivery_type: d.delivery_type,
+        seller_marked_paid: !!d.seller_marked_paid,
+        driver_confirmed_payment: !!d.driver_confirmed_payment,
+        chosen_driver_id: d.chosen_driver_id,
+        hasBid: bidSet.has(d.id),
+      }));
+
+      setDeliveries(rows);
+    } catch (e) {
+      console.error(e);
+      setError("Хүргэлтийн жагсаалт татахад алдаа гарлаа.");
+      setDeliveries([]);
+    } finally {
+      setLoadingList(false);
+    }
+  }
+
+  // 6.A: user орж ирмэгц татна
+  useEffect(() => {
+    if (!user) return;
+    void fetchDeliveries(user.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user]);
+
+  // ✅ 6.B: URL tab солигдох / detail-ээс буцаж ирэхэд refresh
+  useEffect(() => {
+    if (!user) return;
+    void fetchDeliveries(user.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id, urlTab]);
+
+  // ✅ 6.C: Browser focus үед refresh (detail → back хийхэд их хэрэгтэй)
+  useEffect(() => {
+    if (!user) return;
+    const onFocus = () => {
+      void fetchDeliveries(user.id);
+    };
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id]);
+
+  // =================== 7. Гарах ===================
+
+  function handleLogout() {
+    if (typeof window !== "undefined") {
+      window.localStorage.removeItem("incomeUser");
+    }
+    router.push("/");
+  }
+
+  // =================== 8. Жагсаалтын UI ===================
+
+  function renderList(items: DeliveryRow[], currentTab: DriverTabId) {
+    // OPEN таб: нээлттэй + миний саналууд (цуцлах товч энд байхгүй)
+    if (currentTab === "OPEN") {
+      const openWithoutBid = items.filter((d) => !d.hasBid);
+      const openWithBid = items.filter((d) => d.hasBid);
+
+      if (openWithoutBid.length === 0 && openWithBid.length === 0) {
+        return (
+          <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-center text-xs text-slate-500">
+            Нээлттэй хүргэлт одоогоор алга байна.
+          </div>
+        );
+      }
+
+      const renderItem = (d: DeliveryRow, opts?: { dim?: boolean }) => {
+        const t = typeLabel(d.delivery_type);
+        const sb = statusBadge(d.status);
+
+        const subtitle =
+          d.status === "OPEN"
+            ? d.hasBid
+              ? "Та энэ хүргэлт дээр авах санал илгээсэн."
+              : "Энэ хүргэлтэд авах санал илгээгүй байна."
+            : "";
+
+        const dimClass = opts?.dim ? "opacity-70" : "";
+
+        return (
+          <button
+            key={d.id}
+            type="button"
+            onClick={() =>
+              router.push(`/driver/delivery/${d.id}?tab=${activeTab}`)
+            }
+            className={
+              "w-full text-left rounded-2xl border border-slate-200 bg-white px-4 py-3 hover:border-emerald-300 hover:shadow-sm transition " +
+              dimClass
+            }
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex-1 space-y-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-xs font-semibold text-slate-900">
+                    #{d.id.slice(0, 6)}
+                  </span>
+                  <span
+                    className={
+                      "inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium " +
+                      sb.className
+                    }
+                  >
+                    {sb.text}
+                  </span>
+                  {d.status === "OPEN" && d.hasBid && (
+                    <span className="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-medium text-emerald-700">
+                      Хүсэлт илгээсэн
+                    </span>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-2 text-[11px] text-slate-600">
+                  <span>{t.icon}</span>
+                  <span className="font-medium">{t.label}</span>
+                  <span className="text-slate-400">•</span>
+                  <span>{formatPrice(d.price_mnt)}</span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px] text-slate-600 mt-1">
+                  <div>
+                    <div className="text-[10px] font-semibold text-slate-500">
+                      АВАХ
+                    </div>
+                    <p>{shorten(d.from_address, 60)}</p>
+                  </div>
+                  <div>
+                    <div className="text-[10px] font-semibold text-slate-500">
+                      ХҮРГЭХ
+                    </div>
+                    <p>{shorten(d.to_address, 60)}</p>
+                  </div>
+                </div>
+
+                {d.note && (
+                  <p className="mt-1 text-[11px] text-slate-500">
+                    {shorten(d.note, 80)}
+                  </p>
+                )}
+
+                <p className="mt-1 text-[10px] text-slate-400">
+                  Үүсгэсэн: {formatDateTime(d.created_at)}
+                </p>
+
+                {subtitle && (
+                  <p className="mt-1 text-[10px] text-slate-500">{subtitle}</p>
+                )}
+              </div>
+            </div>
+          </button>
+        );
+      };
+
+      return (
+        <div className="space-y-5">
+          {openWithoutBid.length > 0 && (
+            <div className="space-y-2">
+              <p className="px-1 text-[11px] font-medium text-slate-600">
+                Нээлттэй захиалгууд
+              </p>
+              <div className="space-y-3">
+                {openWithoutBid.map((d) => renderItem(d))}
+              </div>
+            </div>
+          )}
+
+          {openWithBid.length > 0 && (
+            <div className="space-y-2">
+              <p className="px-1 text-[11px] font-medium text-slate-600">
+                Миний өгсөн саналууд
+              </p>
+              <div className="space-y-3">
+                {openWithBid.map((d) => renderItem(d, { dim: true }))}
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // Бусад табууд
+    if (items.length === 0) {
+      return (
+        <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-center text-xs text-slate-500">
+          Энэ таб дээр одоогоор хүргэлт алга байна.
+        </div>
+      );
+    }
+
+    return (
+      <div className="space-y-3">
+        {items.map((d) => {
+          const t = typeLabel(d.delivery_type);
+          const sb = statusBadge(d.status);
+
+          let subtitle = "";
+          if (d.status === "ASSIGNED") subtitle = "Энэ хүргэлт танд оноосон байна.";
+          else if (d.status === "ON_ROUTE") subtitle = "Та барааг аваад хүргэлтэд гарсан.";
+          else if (d.status === "DELIVERED") subtitle = "Энэ хүргэлт хүргэсэн төлөвт байна.";
+          else if (d.status === "CLOSED") subtitle = "Энэ хүргэлт бүрэн хаагдсан.";
+          else if (d.status === "DISPUTE") subtitle = "Энэ хүргэлт маргаантай байна.";
+
+          return (
+            <button
+              key={d.id}
+              type="button"
+              onClick={() =>
+                router.push(`/driver/delivery/${d.id}?tab=${activeTab}`)
+              }
+              className="w-full text-left rounded-2xl border border-slate-200 bg-white px-4 py-3 hover:border-emerald-300 hover:shadow-sm transition"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex-1 space-y-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-xs font-semibold text-slate-900">
+                      #{d.id.slice(0, 6)}
+                    </span>
+                    <span
+                      className={
+                        "inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium " +
+                        sb.className
+                      }
+                    >
+                      {sb.text}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-2 text-[11px] text-slate-600">
+                    <span>{t.icon}</span>
+                    <span className="font-medium">{t.label}</span>
+                    <span className="text-slate-400">•</span>
+                    <span>{formatPrice(d.price_mnt)}</span>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px] text-slate-600 mt-1">
+                    <div>
+                      <div className="text-[10px] font-semibold text-slate-500">
+                        АВАХ
+                      </div>
+                      <p>{shorten(d.from_address, 60)}</p>
+                    </div>
+                    <div>
+                      <div className="text-[10px] font-semibold text-slate-500">
+                        ХҮРГЭХ
+                      </div>
+                      <p>{shorten(d.to_address, 60)}</p>
+                    </div>
+                  </div>
+
+                  {d.note && (
+                    <p className="mt-1 text-[11px] text-slate-500">
+                      {shorten(d.note, 80)}
+                    </p>
+                  )}
+
+                  <p className="mt-1 text-[10px] text-slate-400">
+                    Үүсгэсэн: {formatDateTime(d.created_at)}
+                  </p>
+
+                  {subtitle && (
+                    <p className="mt-1 text-[10px] text-slate-500">{subtitle}</p>
+                  )}
+                </div>
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    );
+  }
+
+  // =================== 9. Ачаалалт / алдаа ===================
+
+  if (loadingUser || loadingList) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+        <div className="text-sm text-slate-500">Ачаалж байна…</div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+        <div className="text-sm text-slate-500">Хэрэглэгч олдсонгүй.</div>
+      </div>
+    );
+  }
+
+  const filtered = filterByTab(activeTab, deliveries);
+
+  const tabCounts: Record<DriverTabId, number> = DRIVER_TABS.reduce(
+    (acc, t) => {
+      acc[t.id] = filterByTab(t.id, deliveries).length;
+      return acc;
+    },
+    {} as Record<DriverTabId, number>
+  );
+
+  // =================== 10. Гол UI ===================
+
+  return (
+    <div className="min-h-screen bg-slate-50">
+      <header className="border-b border-slate-200 bg-white">
+        <div className="max-w-3xl mx-auto px-4 py-4 flex items-center justify-between gap-3">
+          <div>
+            <h1 className="text-sm font-semibold text-slate-900">
+              Жолоочийн самбар
+            </h1>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleLogout}
+              className="text-[11px] px-3 py-1.5 rounded-full border border-slate-200 text-slate-700 hover:bg-slate-50"
+            >
+              Гарах
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <main className="max-w-3xl mx-auto px-4 py-5 space-y-4">
+        {message && (
+          <div className="rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-2 text-xs text-emerald-800">
+            {message}
+          </div>
+        )}
+        {error && (
+          <div className="rounded-2xl border border-rose-100 bg-rose-50 px-4 py-2 text-xs text-rose-700">
+            {error}
+          </div>
+        )}
+
+        <div className="rounded-2xl border border-slate-200 bg-white px-2 py-2 flex flex-wrap gap-1">
+          {DRIVER_TABS.map((tab) => {
+            const active = tab.id === activeTab;
+            const count = tabCounts[tab.id] || 0;
+
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => changeTab(tab.id)}
+                className={
+                  "flex items-center gap-1 text-[11px] px-3 py-1.5 rounded-full border transition " +
+                  (active
+                    ? "bg-emerald-600 text-white border-emerald-600"
+                    : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50")
+                }
+              >
+                <span>{tab.label}</span>
+                {count > 0 && (
+                  <span
+                    className={
+                      "inline-flex min-w-[18px] justify-center rounded-full px-1.5 py-0.5 text-[10px] " +
+                      (active
+                        ? "bg-white/10 text-emerald-50"
+                        : "bg-slate-100 text-slate-700")
+                    }
+                  >
+                    {count}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+
+        <section className="space-y-3">{renderList(filtered, activeTab)}</section>
+      </main>
+    </div>
+  );
+}
+----- END FILE 004 -----
+
+==========================================================================================
+[005] PATH: .\app\globals.css
+CHARS: 488
+----- BEGIN FILE 005 -----
+@import "tailwindcss";
+
+:root {
+  --background: #ffffff;
+  --foreground: #171717;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0a0a0a;
+    --foreground: #ededed;
+  }
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: Arial, Helvetica, sans-serif;
+}
+----- END FILE 005 -----
+
+==========================================================================================
+[006] PATH: .\app\layout.tsx
+CHARS: 689
+----- BEGIN FILE 006 -----
+import type { Metadata } from "next";
+import { Geist, Geist_Mono } from "next/font/google";
+import "./globals.css";
+
+const geistSans = Geist({
+  variable: "--font-geist-sans",
+  subsets: ["latin"],
+});
+
+const geistMono = Geist_Mono({
+  variable: "--font-geist-mono",
+  subsets: ["latin"],
+});
+
+export const metadata: Metadata = {
+  title: "Create Next App",
+  description: "Generated by create next app",
+};
+
+export default function RootLayout({
+  children,
+}: Readonly<{
+  children: React.ReactNode;
+}>) {
+  return (
+    <html lang="en">
+      <body
+        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
+      >
+        {children}
+      </body>
+    </html>
+  );
+}
+----- END FILE 006 -----
+
+==========================================================================================
+[007] PATH: .\app\page.tsx
+CHARS: 6135
+----- BEGIN FILE 007 -----
+"use client";
+
+import { FormEvent, useState } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { supabase } from "@/lib/supabase";
+
+export default function LoginPage() {
+  const router = useRouter();
+
+  const [identifier, setIdentifier] = useState(""); // имэйл эсвэл утас
+  const [password, setPassword] = useState(""); // 4 оронтой PIN
+  const [showPassword, setShowPassword] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [error, setError] = useState("");
+
+  async function handleSubmit(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    setError("");
+
+    if (!identifier.trim() || !password.trim()) {
+      setError("Имэйл/утас болон нууц үгээ бөглөнө үү.");
+      return;
+    }
+
+    setIsSubmitting(true);
+
+    const { data, error: selectError } = await supabase
+      .from("users")
+      .select("*")
+      .or(`email.eq.${identifier},phone.eq.${identifier}`)
+      .maybeSingle();
+
+    if (selectError) {
+      console.error(selectError);
+      setIsSubmitting(false);
+      setError("Серверийн алдаа гарлаа. Дахин оролдоно уу.");
+      return;
+    }
+
+    if (!data) {
+      setIsSubmitting(false);
+      setError("Ийм хэрэглэгч бүртгэлгүй байна.");
+      return;
+    }
+
+    if (data.pin !== password) {
+      setIsSubmitting(false);
+      setError("Нууц үг буруу байна.");
+      return;
+    }
+
+    // ✅ Амжилттай нэвтэрвэл localStorage-д хадгалаад role-оор нь чиглүүлнэ
+    const user = {
+      id: data.id,
+      role: data.role,
+      name: data.name,
+      phone: data.phone,
+      email: data.email,
+    };
+
+    if (typeof window !== "undefined") {
+      localStorage.setItem("incomeUser", JSON.stringify(user));
+    }
+
+    setIsSubmitting(false);
+
+    if (data.role === "seller") {
+      router.push("/seller");
+    } else {
+      router.push("/driver");
+    }
+  }
+
+  return (
+    <div className="min-h-screen bg-slate-50 flex items-center justify-center px-4">
+      <div className="w-full max-w-md">
+        {/* Top logo / title */}
+        <div className="mb-8 text-center">
+          <div className="inline-flex items-center justify-center rounded-full bg-emerald-50 px-4 py-2 mb-3">
+            <span className="text-sm font-semibold text-emerald-700">
+              INCOME
+            </span>
+          </div>
+          <h1 className="text-2xl font-semibold text-slate-900">
+            Хүргэлтийн marketplace
+          </h1>
+          <p className="mt-2 text-sm text-slate-500">
+            Утас эсвэл имэйлээрээ нэвтэрч, хүргэлтийн системээ ашигла.
+          </p>
+        </div>
+
+        {/* Card */}
+        <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6">
+          <h2 className="text-lg font-semibold text-slate-900 mb-1">
+            Нэвтрэх
+          </h2>
+          <p className="text-sm text-slate-500 mb-6">
+            Өмнө бүртгүүлсэн имэйл эсвэл утасны дугаараар нэвтэрнэ.
+          </p>
+
+          <form onSubmit={handleSubmit} className="space-y-4">
+            {/* Email / Phone */}
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">
+                Имэйл эсвэл утасны дугаар
+              </label>
+              <input
+                type="text"
+                className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 bg-slate-50"
+                placeholder="example@mail.com эсвэл 88xxxxxx"
+                value={identifier}
+                onChange={(e) => setIdentifier(e.target.value)}
+              />
+            </div>
+
+            {/* Password */}
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">
+                Нууц үг (4 оронтой PIN)
+              </label>
+              <div className="relative">
+                <input
+                  type={showPassword ? "text" : "password"}
+                  className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 bg-slate-50 pr-10 tracking-[0.3em]"
+                  placeholder="••••"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                />
+                <button
+                  type="button"
+                  className="absolute inset-y-0 right-0 px-3 text-xs text-slate-500 hover:text-slate-700"
+                  onClick={() => setShowPassword((v) => !v)}
+                >
+                  {showPassword ? "Нуух" : "Харах"}
+                </button>
+              </div>
+            </div>
+
+            {/* Error */}
+            {error && (
+              <div className="rounded-xl bg-red-50 text-red-700 text-sm px-3 py-2">
+                {error}
+              </div>
+            )}
+
+            {/* Submit */}
+            <button
+              type="submit"
+              disabled={isSubmitting}
+              className="w-full inline-flex items-center justify-center rounded-xl bg-emerald-600 text-white text-sm font-semibold py-2.5 mt-2 disabled:opacity-60 disabled:cursor-not-allowed hover:bg-emerald-700 transition-colors"
+            >
+              {isSubmitting ? "Нэвтрэж байна..." : "Нэвтрэх"}
+            </button>
+          </form>
+
+          {/* Divider */}
+          <div className="flex items-center mt-6 mb-4">
+            <div className="flex-1 h-px bg-slate-200" />
+            <span className="mx-3 text-xs text-slate-400">эсвэл</span>
+            <div className="flex-1 h-px bg-slate-200" />
+          </div>
+
+          {/* Register link */}
+          <p className="text-sm text-slate-600 text-center">
+            Шинэ хэрэглэгч үү?{" "}
+            <Link
+              href="/register"
+              className="font-semibold text-emerald-600 hover:text-emerald-700"
+            >
+              Бүртгэл үүсгэх
+            </Link>
+          </p>
+        </div>
+
+        {/* Footer */}
+        <p className="mt-6 text-xs text-slate-400 text-center">
+          INCOME v1.0 · BABA &amp; Hypatia · 2025
+        </p>
+      </div>
+    </div>
+  );
+}
+----- END FILE 007 -----
+
+==========================================================================================
+[008] PATH: .\app\register\page.tsx
+CHARS: 11136
+----- BEGIN FILE 008 -----
+"use client";
+
+import { FormEvent, useState } from "react";
+import { useRouter } from "next/navigation";
+import Link from "next/link";
+import { supabase } from "@/lib/supabase";
+
+type Role = "seller" | "driver";
+
+export default function RegisterPage() {
+  const router = useRouter();
+
+  const [role, setRole] = useState<Role>("seller");
+  const [name, setName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [email, setEmail] = useState("");
+  const [pin, setPin] = useState("");
+  const [pin2, setPin2] = useState("");
+  const [showPin, setShowPin] = useState(false);
+  const [agree, setAgree] = useState(false);
+
+  const [error, setError] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const roleLabel = role === "seller" ? "Худалдагч" : "Жолооч";
+
+  async function handleSubmit(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    setError("");
+
+    // --- Фронт талын шалгалт ---
+    if (!name.trim()) {
+      setError("Нэрээ бөглөнө үү.");
+      return;
+    }
+    if (!phone.trim()) {
+      setError("Утасны дугаараа бөглөнө үү.");
+      return;
+    }
+    if (!email.trim()) {
+      setError("Имэйл хаягаа бөглөнө үү.");
+      return;
+    }
+    if (!email.includes("@") || !email.includes(".")) {
+      setError("Имэйл хаягаа зөв форматтай оруулна уу.");
+      return;
+    }
+    if (!/^\d{4}$/.test(pin)) {
+      setError("Нууц үг 4 оронтой тоо байх ёстой.");
+      return;
+    }
+    if (pin !== pin2) {
+      setError("Нууц үг хоёр таарахгүй байна.");
+      return;
+    }
+    if (!agree) {
+      setError("Ашиглах нөхцөлтэй танилцаж зөвшөөрөх шаардлагатай.");
+      return;
+    }
+
+    setIsSubmitting(true);
+
+    // --- Утас / имэйл давтагдаж байгаа эсэхийг шалгана ---
+    const { data: existing, error: existsError } = await supabase
+      .from("users")
+      .select("id")
+      .or(`phone.eq.${phone},email.eq.${email}`)
+      .maybeSingle();
+
+    if (existsError) {
+      console.error(existsError);
+      setIsSubmitting(false);
+      setError("Серверийн алдаа гарлаа. Дараа дахин оролдоно уу.");
+      return;
+    }
+
+    if (existing) {
+      setIsSubmitting(false);
+      setError("Энэ утас эсвэл имэйлээр аль хэдийн бүртгүүлсэн байна.");
+      return;
+    }
+
+    // --- Жинхэнэ insert ---
+    const { error: insertError } = await supabase.from("users").insert({
+      role,
+      name,
+      phone,
+      email,
+      pin, // v2 дээр PIN-г hash хийнэ
+    });
+
+    if (insertError) {
+      console.error(insertError);
+      setIsSubmitting(false);
+      setError("Бүртгэл үүсгэхэд алдаа гарлаа.");
+      return;
+    }
+
+    // Амжилттай → Login руу
+    setIsSubmitting(false);
+    router.push("/");
+  }
+
+  return (
+    <div className="min-h-screen bg-slate-50 flex items-center justify-center px-4">
+      <div className="w-full max-w-md">
+        {/* Top logo / title */}
+        <div className="mb-8 text-center">
+          <div className="inline-flex items-center justify-center rounded-full bg-emerald-50 px-4 py-2 mb-3">
+            <span className="text-sm font-semibold text-emerald-700">
+              INCOME
+            </span>
+          </div>
+          <h1 className="text-2xl font-semibold text-slate-900">
+            Бүртгэл үүсгэх
+          </h1>
+          <p className="mt-2 text-sm text-slate-500">
+            Жолооч эсвэл Худалдагч хэлбэрээр нэг удаа бүртгүүлж ашиглана.
+          </p>
+        </div>
+
+        {/* Card */}
+        <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6">
+          {/* Role toggle */}
+          <div className="flex mb-6 rounded-xl bg-slate-50 p-1">
+            <button
+              type="button"
+              onClick={() => setRole("seller")}
+              className={`flex-1 text-sm font-medium py-2 rounded-lg transition ${
+                role === "seller"
+                  ? "bg-white shadow-sm text-emerald-700"
+                  : "text-slate-500"
+              }`}
+            >
+              Худалдагч
+            </button>
+            <button
+              type="button"
+              onClick={() => setRole("driver")}
+              className={`flex-1 text-sm font-medium py-2 rounded-lg transition ${
+                role === "driver"
+                  ? "bg-white shadow-sm text-emerald-700"
+                  : "text-slate-500"
+              }`}
+            >
+              Жолооч
+            </button>
+          </div>
+
+          <form onSubmit={handleSubmit} className="space-y-4">
+            {/* Name */}
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">
+                Нэр
+              </label>
+              <input
+                type="text"
+                className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 bg-slate-50"
+                placeholder="Жишээ: Батбаяр"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+              />
+            </div>
+
+            {/* Phone */}
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">
+                Утасны дугаар
+              </label>
+              <input
+                type="tel"
+                className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 bg-slate-50"
+                placeholder="Жишээ: 88112233"
+                value={phone}
+                onChange={(e) => setPhone(e.target.value)}
+              />
+              <p className="mt-1 text-xs text-slate-400">
+                Нэг утасны дугаараар зөвхөн нэг л удаа бүртгүүлнэ.
+              </p>
+            </div>
+
+            {/* Email */}
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">
+                Имэйл хаяг
+              </label>
+              <input
+                type="email"
+                className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 bg-slate-50"
+                placeholder="example@mail.com"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+              />
+              <p className="mt-1 text-xs text-slate-400">
+                Имэйлээр нууц үг сэргээх, баталгаажуулах мэдээлэл очно.
+              </p>
+            </div>
+
+            {/* PIN */}
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">
+                Нууц үг (4 оронтой PIN)
+              </label>
+              <div className="relative">
+                <input
+                  type={showPin ? "text" : "password"}
+                  inputMode="numeric"
+                  maxLength={4}
+                  className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 bg-slate-50 pr-10 tracking-[0.3em]"
+                  placeholder="••••"
+                  value={pin}
+                  onChange={(e) => {
+                    const v = e.target.value.replace(/\D/g, "");
+                    setPin(v);
+                  }}
+                />
+                <button
+                  type="button"
+                  className="absolute inset-y-0 right-0 px-3 text-xs text-slate-500 hover:text-slate-700"
+                  onClick={() => setShowPin((v) => !v)}
+                >
+                  {showPin ? "Нуух" : "Харах"}
+                </button>
+              </div>
+              <p className="mt-1 text-xs text-slate-400">
+                Зөвхөн 4 оронтой тоо байхаар тохируулна (жишээ: 1234).
+              </p>
+            </div>
+
+            {/* PIN confirm */}
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">
+                Нууц үг давтах
+              </label>
+              <input
+                type={showPin ? "text" : "password"}
+                inputMode="numeric"
+                maxLength={4}
+                className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 bg-slate-50 tracking-[0.3em]"
+                placeholder="••••"
+                value={pin2}
+                onChange={(e) => {
+                  const v = e.target.value.replace(/\D/g, "");
+                  setPin2(v);
+                }}
+              />
+            </div>
+
+            {/* Terms */}
+            <div className="flex items-start gap-2 pt-1">
+              <input
+                id="agree"
+                type="checkbox"
+                checked={agree}
+                onChange={(e) => setAgree(e.target.checked)}
+                className="mt-1 h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+              />
+              <label
+                htmlFor="agree"
+                className="text-xs text-slate-600 leading-relaxed"
+              >
+                Би INCOME хүргэлтийн marketplace-ийн ашиглах нөхцөл, хувийн
+                мэдээлэл ашиглах журмыг уншиж танилцсан бөгөөд{" "}
+                <span className="font-semibold">зөвшөөрч байна.</span>
+              </label>
+            </div>
+
+            {/* Error */}
+            {error && (
+              <div className="rounded-xl bg-red-50 text-red-700 text-sm px-3 py-2">
+                {error}
+              </div>
+            )}
+
+            {/* Submit */}
+            <button
+              type="submit"
+              disabled={isSubmitting}
+              className="w-full inline-flex items-center justify-center rounded-xl bg-emerald-600 text-white text-sm font-semibold py-2.5 mt-2 disabled:opacity-60 disabled:cursor-not-allowed hover:bg-emerald-700 transition-colors"
+            >
+              {isSubmitting
+                ? "Бүртгэл үүсгэж байна..."
+                : `${roleLabel} бүртгэл үүсгэх`}
+            </button>
+          </form>
+
+          {/* Divider */}
+          <div className="flex items-center mt-6 mb-4">
+            <div className="flex-1 h-px bg-slate-200" />
+            <span className="mx-3 text-xs text-slate-400">эсвэл</span>
+            <div className="flex-1 h-px bg-slate-200" />
+          </div>
+
+          {/* Back to login */}
+          <p className="text-sm text-slate-600 text-center">
+            Аль хэдийн бүртгэлтэй юу?{" "}
+            <Link
+              href="/"
+              className="font-semibold text-emerald-600 hover:text-emerald-700"
+            >
+              Нэвтрэх
+            </Link>
+          </p>
+        </div>
+
+        {/* Footer */}
+        <p className="mt-6 text-xs text-slate-400 text-center">
+          INCOME v1.0 · {roleLabel} бүртгэл · Монгол
+        </p>
+      </div>
+    </div>
+  );
+}
+----- END FILE 008 -----
+
+==========================================================================================
+[009] PATH: 
+CHARS: 43352
+----- BEGIN FILE 009 -----
+"use client";
+
+/* ===========================
+ * app/seller/delivery/[id]/page.tsx
+ * - ✅ Rating (од өгөх) логик бүрэн хассан
+ * - ✅ Жолооч цуцлах үед: driver.total_deliveries -50, driver.rating -1
+ * =========================== */
+
+import { useEffect, useState } from "react";
+import { useRouter, useParams, useSearchParams } from "next/navigation";
+import { supabase } from "@/lib/supabase";
+import { DeliveryStatus } from "@/lib/deliveryLogic";
+
+/* ===========================
+ * TYPES
+ * =========================== */
+
+type Role = "seller" | "driver";
+
+type IncomeUser = {
+  id: string;
+  role: Role;
+  name: string;
+  phone: string;
+  email: string;
+};
+
+type DeliveryDetail = {
+  id: string;
+  seller_id: string;
+  from_address: string | null;
+  to_address: string | null;
+  note: string | null;
+  status: DeliveryStatus;
+  created_at: string;
+  price_mnt: number | null;
+  delivery_type: string | null;
+  chosen_driver_id: string | null;
+
+  seller_marked_paid: boolean;
+  driver_confirmed_payment: boolean;
+  closed_at: string | null;
+
+  dispute_reason?: string | null;
+  dispute_opened_at?: string | null;
+};
+
+type DriverSummary = {
+  id: string;
+  name: string | null;
+  phone: string | null;
+  rating?: number | null;
+  total_deliveries?: number | null;
+};
+
+type DriverBidRow = {
+  id: string;
+  driver_id: string;
+  created_at: string;
+  driver: DriverSummary | null;
+};
+
+/* ===========================
+ * HELPERS
+ * =========================== */
+
+function typeLabel(deliveryType: string | null): { icon: string; label: string } {
+  switch (deliveryType) {
+    case "apartment":
+      return { icon: "🏙", label: "Байр" };
+    case "ger":
+      return { icon: "🏠", label: "Гэр хороолол" };
+    case "camp":
+      return { icon: "🏕", label: "Лагер" };
+    case "countryside":
+      return { icon: "🚌", label: "Орон нутаг" };
+    default:
+      return { icon: "📦", label: "Хүргэлт" };
+  }
+}
+
+function statusBadge(status: DeliveryStatus) {
+  switch (status) {
+    case "OPEN":
+      return { text: "Нээлттэй", className: "bg-emerald-50 text-emerald-700 border-emerald-100" };
+    case "ASSIGNED":
+      return { text: "Жолооч сонгосон", className: "bg-sky-50 text-sky-700 border-sky-100" };
+    case "ON_ROUTE":
+      return { text: "Замд гарсан", className: "bg-indigo-50 text-indigo-700 border-indigo-100" };
+    case "DELIVERED":
+      return { text: "Хүргэсэн", className: "bg-slate-900 text-white border-slate-900" };
+    case "CLOSED":
+      return { text: "Хаагдсан", className: "bg-emerald-900 text-emerald-50 border-emerald-900" };
+    case "CANCELLED":
+      return { text: "Цуцалсан", className: "bg-rose-50 text-rose-700 border-rose-100" };
+    case "DISPUTE":
+      return { text: "Маргаан", className: "bg-rose-50 text-rose-700 border-rose-100" };
+    default:
+      return { text: status, className: "bg-slate-50 text-slate-600 border-slate-100" };
+  }
+}
+
+function shorten(s: string | null, max = 120) {
+  if (!s) return "";
+  const t = s.trim();
+  if (t.length <= max) return t;
+  return t.slice(0, max).replace(/\s+$/, "") + "…";
+}
+
+function formatPrice(n: number | null) {
+  if (!n) return "Үнэ тохиролцоно";
+  return n.toLocaleString("mn-MN") + "₮";
+}
+
+function formatDateTime(iso: string) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return (
+    d.toLocaleDateString("mn-MN", { month: "2-digit", day: "2-digit" }) +
+    " " +
+    d.toLocaleTimeString("mn-MN", { hour: "2-digit", minute: "2-digit" })
+  );
+}
+
+function driverRatingText(driver: DriverSummary | null) {
+  if (!driver) return "Үнэлгээ байхгүй";
+  if (driver.rating == null) return "Үнэлгээ байхгүй";
+  const r = driver.rating.toFixed(1).replace(/\.0$/, "");
+  const total = driver.total_deliveries || 0;
+  return `${r} ★ • ${total} хүргэлт`;
+}
+
+function clampMin(n: number, min: number) {
+  return n < min ? min : n;
+}
+
+/* ===========================
+ * MAIN
+ * =========================== */
+
+export default function SellerDeliveryDetailPage() {
+  const router = useRouter();
+  const params = useParams();
+  const searchParams = useSearchParams();
+
+  const idParam = (params as any)?.id;
+  const deliveryId =
+    typeof idParam === "string" ? idParam : Array.isArray(idParam) ? idParam[0] : "";
+
+  const fromTab = searchParams.get("tab");
+  const backUrl = fromTab ? `/seller?tab=${fromTab}` : "/seller";
+
+  const [user, setUser] = useState<IncomeUser | null>(null);
+  const [loadingUser, setLoadingUser] = useState(true);
+
+  const [delivery, setDelivery] = useState<DeliveryDetail | null>(null);
+  const [bids, setBids] = useState<DriverBidRow[]>([]);
+  const [loadingDetail, setLoadingDetail] = useState(true);
+
+  const [assigningId, setAssigningId] = useState<string | null>(null);
+  const [markingPickedUp, setMarkingPickedUp] = useState(false);
+
+  const [showDisputeModal, setShowDisputeModal] = useState(false);
+  const [disputeReason, setDisputeReason] = useState("");
+  const [openingDispute, setOpeningDispute] = useState(false);
+
+  // DISPUTE resolve
+  const [resolvingDispute, setResolvingDispute] = useState(false);
+  const [showResolveDisputeModal, setShowResolveDisputeModal] = useState(false);
+
+  // Cancel chosen driver
+  const [showCancelModal, setShowCancelModal] = useState(false);
+  const [cancelReasons, setCancelReasons] = useState({
+    no_show: false,
+    too_late: false,
+    no_contact: false,
+    bad_attitude: false,
+  });
+  const [cancelOtherReason, setCancelOtherReason] = useState("");
+  const [cancelling, setCancelling] = useState(false);
+
+  // Driver detail modal
+  const [showDriverInfoModal, setShowDriverInfoModal] = useState(false);
+
+  // Payment toggle
+  const [payLoading, setPayLoading] = useState(false);
+
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  /* ---------- LOGIN GUARD ---------- */
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem("incomeUser");
+      if (!raw) {
+        router.replace("/");
+        return;
+      }
+      const parsed: IncomeUser = JSON.parse(raw);
+      if (parsed.role !== "seller") {
+        router.replace("/");
+        return;
+      }
+      setUser(parsed);
+      setLoadingUser(false);
+    } catch (e) {
+      console.error(e);
+      setError("Хэрэглэгчийн мэдээлэл уншихад алдаа гарлаа.");
+      setLoadingUser(false);
+    }
+  }, [router]);
+
+  /* ---------- FETCH DETAIL ---------- */
+  useEffect(() => {
+    if (!user || !deliveryId) return;
+    void fetchDetail(user.id, deliveryId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, deliveryId]);
+
+  async function fetchDetail(sellerId: string, id: string) {
+    try {
+      setLoadingDetail(true);
+      setError(null);
+      setMessage(null);
+
+      const { data, error } = await supabase
+        .from("deliveries")
+        .select(
+          `
+          id,
+          seller_id,
+          from_address,
+          to_address,
+          note,
+          status,
+          created_at,
+          price_mnt,
+          delivery_type,
+          chosen_driver_id,
+          seller_marked_paid,
+          driver_confirmed_payment,
+          closed_at,
+          dispute_reason,
+          dispute_opened_at,
+          driver_bids (
+            id,
+            driver_id,
+            created_at,
+            driver:driver_id (
+              id,
+              name,
+              phone,
+              rating,
+              total_deliveries
+            )
+          )
+        `
+        )
+        .eq("id", id)
+        .eq("seller_id", sellerId)
+        .maybeSingle();
+
+      if (error) {
+        console.error(error);
+        setError("Хүргэлтийн мэдээлэл татахад алдаа гарлаа.");
+        setDelivery(null);
+        setBids([]);
+        return;
+      }
+
+      if (!data) {
+        setError("Ийм хүргэлт олдсонгүй.");
+        setDelivery(null);
+        setBids([]);
+        return;
+      }
+
+      const d = data as any;
+
+      const detail: DeliveryDetail = {
+        id: d.id,
+        seller_id: d.seller_id,
+        from_address: d.from_address,
+        to_address: d.to_address,
+        note: d.note,
+        status: d.status,
+        created_at: d.created_at,
+        price_mnt: d.price_mnt,
+        delivery_type: d.delivery_type,
+        chosen_driver_id: d.chosen_driver_id,
+        seller_marked_paid: !!d.seller_marked_paid,
+        driver_confirmed_payment: !!d.driver_confirmed_payment,
+        closed_at: d.closed_at,
+        dispute_reason: d.dispute_reason,
+        dispute_opened_at: d.dispute_opened_at,
+      };
+
+      const bidRows: DriverBidRow[] = Array.isArray(d.driver_bids)
+        ? d.driver_bids.map((b: any) => ({
+            id: b.id,
+            driver_id: b.driver_id,
+            created_at: b.created_at,
+            driver: b.driver
+              ? {
+                  id: b.driver.id,
+                  name: b.driver.name,
+                  phone: b.driver.phone,
+                  rating: b.driver.rating,
+                  total_deliveries: b.driver.total_deliveries,
+                }
+              : null,
+          }))
+        : [];
+
+      setDelivery(detail);
+      setBids(bidRows);
+    } finally {
+      setLoadingDetail(false);
+    }
+  }
+
+  /* ---------- LOGOUT ---------- */
+  function handleLogout() {
+    if (typeof window !== "undefined") {
+      window.localStorage.removeItem("incomeUser");
+    }
+    router.push("/");
+  }
+
+  /* ---------- DRIVER SELECT (OPEN -> ASSIGNED) ---------- */
+  async function handleSelectDriver(driverId: string) {
+    if (!delivery || !user) return;
+
+    if (delivery.status !== "OPEN") {
+      setMessage("Жолоочийг зөвхөн нээлттэй хүргэлт дээр сонгож болно.");
+      return;
+    }
+
+    setAssigningId(driverId);
+    setError(null);
+    setMessage(null);
+
+    try {
+      const { error } = await supabase
+        .from("deliveries")
+        .update({ chosen_driver_id: driverId, status: "ASSIGNED" })
+        .eq("id", delivery.id)
+        .eq("seller_id", user.id);
+
+      if (error) {
+        console.error(error);
+        setError("Жолоочийг сонгоход алдаа гарлаа.");
+        return;
+      }
+
+      setDelivery({ ...delivery, chosen_driver_id: driverId, status: "ASSIGNED" });
+      setMessage("Жолооч амжилттай сонголоо.");
+    } finally {
+      setAssigningId(null);
+    }
+  }
+
+  /* ---------- ASSIGNED -> ON_ROUTE ---------- */
+  async function handleMarkPickedUp() {
+    if (!delivery || !user) return;
+
+    if (delivery.status !== "ASSIGNED" || !delivery.chosen_driver_id) {
+      setMessage("Эхлээд жолоочийг сонгосон байх ёстой.");
+      return;
+    }
+
+    setMarkingPickedUp(true);
+    setError(null);
+    setMessage(null);
+
+    try {
+      const { error } = await supabase
+        .from("deliveries")
+        .update({ status: "ON_ROUTE" })
+        .eq("id", delivery.id)
+        .eq("seller_id", user.id);
+
+      if (error) {
+        console.error(error);
+        setError("Хүргэлтэд гарсан гэж тэмдэглэхэд алдаа гарлаа.");
+        return;
+      }
+
+      setDelivery({ ...delivery, status: "ON_ROUTE" });
+      setMessage("Хүргэлтэд гарсан гэж тэмдэглэлээ.");
+
+      setTimeout(() => {
+        router.push("/seller?tab=ON_ROUTE");
+      }, 250);
+    } finally {
+      setMarkingPickedUp(false);
+    }
+  }
+
+  /* ---------- DISPUTE OPEN ---------- */
+  const canOpenDisputeFlag = !!delivery && !!delivery.chosen_driver_id && delivery.status === "ON_ROUTE";
+
+  async function handleOpenDisputeConfirm() {
+    if (!delivery || !user || !delivery.chosen_driver_id) return;
+
+    const reason = disputeReason.trim();
+    if (!reason) {
+      setError("Маргааны шалтгаанаа товчхон бичнэ үү.");
+      return;
+    }
+
+    setOpeningDispute(true);
+    setError(null);
+    setMessage(null);
+
+    try {
+      const nowIso = new Date().toISOString();
+      const { error } = await supabase
+        .from("deliveries")
+        .update({ status: "DISPUTE", dispute_reason: reason, dispute_opened_at: nowIso })
+        .eq("id", delivery.id)
+        .eq("seller_id", user.id);
+
+      if (error) {
+        console.error(error);
+        setError("Маргаан нээхэд алдаа гарлаа.");
+        return;
+      }
+
+      setDelivery({ ...delivery, status: "DISPUTE", dispute_reason: reason, dispute_opened_at: nowIso });
+      setShowDisputeModal(false);
+      setDisputeReason("");
+      setMessage("Маргаан амжилттай нээгдлээ.");
+    } finally {
+      setOpeningDispute(false);
+    }
+  }
+
+  /* ---------- DISPUTE RESOLVE (DISPUTE -> DELIVERED) ---------- */
+  const canResolveDisputeFlag = !!delivery && delivery.status === "DISPUTE";
+
+  async function handleResolveDispute() {
+    if (!delivery || !user) return;
+
+    setResolvingDispute(true);
+    setError(null);
+    setMessage(null);
+
+    try {
+      const { error } = await supabase
+        .from("deliveries")
+        .update({ status: "DELIVERED", dispute_reason: null, dispute_opened_at: null })
+        .eq("id", delivery.id)
+        .eq("seller_id", user.id);
+
+      if (error) {
+        console.error(error);
+        setError("Маргаан шийдвэрлэхэд алдаа гарлаа.");
+        return;
+      }
+
+      setDelivery({ ...delivery, status: "DELIVERED", dispute_reason: null, dispute_opened_at: null });
+      setShowResolveDisputeModal(false);
+      setMessage("Маргааныг шийдвэрлэж, хүргэсэн төлөв рүү шилжүүллээ.");
+
+      setTimeout(() => {
+        router.push("/seller?tab=DELIVERED");
+      }, 450);
+    } finally {
+      setResolvingDispute(false);
+    }
+  }
+
+  /* ---------- APPLY CANCEL PENALTY (driver) ---------- */
+  async function applyDriverCancelPenalty(driverId: string) {
+    // users table дээр driver мэдээлэл байна гэж үзэв (id = driverId)
+    // total_deliveries: -50 (min 0)
+    // rating: -1 (min 0)
+    try {
+      const { data, error } = await supabase
+        .from("users")
+        .select("id, total_deliveries, rating")
+        .eq("id", driverId)
+        .maybeSingle();
+
+      if (error) {
+        console.error("PENALTY FETCH ERROR:", error);
+        return;
+      }
+      if (!data) return;
+
+      const currentTotal = Number((data as any).total_deliveries ?? 0);
+      const currentRating = (data as any).rating == null ? null : Number((data as any).rating);
+
+      const nextTotal = clampMin(currentTotal - 50, 0);
+      const nextRating = currentRating == null ? 0 : clampMin(currentRating - 1, 0);
+
+      const { error: updErr } = await supabase
+        .from("users")
+        .update({
+          total_deliveries: nextTotal,
+          rating: nextRating,
+        })
+        .eq("id", driverId);
+
+      if (updErr) console.error("PENALTY UPDATE ERROR:", updErr);
+    } catch (e) {
+      console.error("PENALTY EXCEPTION:", e);
+    }
+  }
+
+  /* ---------- CANCEL DRIVER (ASSIGNED -> OPEN + блок + penalty) ---------- */
+  const canCancelDriver = !!delivery && delivery.status === "ASSIGNED" && !!delivery.chosen_driver_id;
+
+  function toggleCancelReason(key: keyof typeof cancelReasons) {
+    setCancelReasons((prev) => ({ ...prev, [key]: !prev[key] }));
+  }
+
+  async function handleCancelDriverConfirm() {
+    if (!delivery || !user || !delivery.chosen_driver_id) return;
+
+    const labels: string[] = [];
+    if (cancelReasons.no_show) labels.push("Ирээгүй");
+    if (cancelReasons.too_late) labels.push("Хэт удсан");
+    if (cancelReasons.no_contact) labels.push("Утас холбогдохгүй");
+    if (cancelReasons.bad_attitude) labels.push("Харилцаа таалагдаагүй");
+    if (cancelOtherReason.trim()) labels.push(cancelOtherReason.trim());
+
+    if (labels.length === 0) {
+      setError("Жолоочийг цуцлах шалтгаанаа сонгоно уу.");
+      return;
+    }
+
+    const reasonText = labels.join(" / ");
+    const blockedDriverId = delivery.chosen_driver_id;
+
+    setCancelling(true);
+    setError(null);
+    setMessage(null);
+
+    try {
+      // 1) block
+      const { error: blockError } = await supabase
+        .from("seller_blocked_drivers")
+        .insert({ seller_id: user.id, driver_id: blockedDriverId, reason: reasonText });
+
+      if (blockError) {
+        console.error(blockError);
+        setError("Жолоочийг цуцлахад алдаа гарлаа (блок хэсэг).");
+        return;
+      }
+
+      // 2) reopen delivery
+      const { error: updError } = await supabase
+        .from("deliveries")
+        .update({ status: "OPEN", chosen_driver_id: null })
+        .eq("id", delivery.id)
+        .eq("seller_id", user.id);
+
+      if (updError) {
+        console.error(updError);
+        setError("Хүргэлтийг нээлттэй болгоход алдаа гарлаа.");
+        return;
+      }
+
+      // 3) ✅ penalty apply (driver)
+      await applyDriverCancelPenalty(blockedDriverId);
+
+      // UI state
+      setDelivery({ ...delivery, status: "OPEN", chosen_driver_id: null });
+      setBids((prev) => prev.filter((b) => b.driver_id !== blockedDriverId));
+
+      setShowCancelModal(false);
+      setCancelReasons({ no_show: false, too_late: false, no_contact: false, bad_attitude: false });
+      setCancelOtherReason("");
+
+      setMessage(
+        "Жолоочийг цуцалж, хүргэлтийг дахин нээлттэй болголоо. Энэ жолооч таны дараагийн хүргэлтүүд дээр харагдахгүй. (Жолоочийн оноо: -50 хүргэлт, -1 од)"
+      );
+    } finally {
+      setCancelling(false);
+    }
+  }
+
+  /* ---------- SELLER PAID TOGGLE ---------- */
+  async function handleSellerPaid() {
+    if (!delivery || !user) return;
+
+    if (delivery.status === "CLOSED") {
+      setError("Хаагдсан хүргэлтийн төлбөрийн мэдээллийг засах боломжгүй.");
+      return;
+    }
+
+    if (delivery.status !== "DELIVERED") {
+      setError("Зөвхөн хүргэсэн хүргэлт дээр төлбөр тэмдэглэнэ.");
+      return;
+    }
+
+    setPayLoading(true);
+    setError(null);
+    setMessage(null);
+
+    try {
+      const newSellerMarked = !delivery.seller_marked_paid;
+
+      let newStatus: DeliveryStatus = delivery.status;
+      let newClosedAt: string | null = delivery.closed_at;
+
+      if (newSellerMarked) {
+        if (delivery.driver_confirmed_payment) {
+          newStatus = "CLOSED";
+          newClosedAt = new Date().toISOString();
+        } else {
+          newStatus = "DELIVERED";
+        }
+      } else {
+        newStatus = "DELIVERED";
+      }
+
+      const { error } = await supabase
+        .from("deliveries")
+        .update({ seller_marked_paid: newSellerMarked, status: newStatus, closed_at: newClosedAt })
+        .eq("id", delivery.id)
+        .eq("seller_id", user.id);
+
+      if (error) {
+        console.error("SELLER PAID ERROR:", error);
+        setError("Төлбөр төлснөө тэмдэглэхэд алдаа гарлаа.");
+        return;
+      }
+
+      setDelivery({ ...delivery, seller_marked_paid: newSellerMarked, status: newStatus, closed_at: newClosedAt });
+
+      if (newSellerMarked) {
+        setMessage(
+          newStatus === "CLOSED"
+            ? "Жолоочид төлбөр шилжүүлснээ тэмдэглэлээ. Жолооч мөнгөө баталсан тул энэ хүргэлт хаагдлаа."
+            : "Жолоочид төлбөр шилжүүлснээ тэмдэглэлээ."
+        );
+      } else {
+        setMessage("Жолоочид төлбөр шилжүүлээгүй гэж заслаа.");
+      }
+    } finally {
+      setPayLoading(false);
+    }
+  }
+
+  /* ===========================
+   * LOADING
+   * =========================== */
+
+  if (loadingUser || loadingDetail) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+        <div className="text-sm text-slate-500">Ачаалж байна…</div>
+      </div>
+    );
+  }
+
+  if (!user || !delivery) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+        <div className="text-sm text-slate-500">Хүргэлтийн мэдээлэл олдсонгүй.</div>
+      </div>
+    );
+  }
+
+  const t = typeLabel(delivery.delivery_type);
+  const sb = statusBadge(delivery.status);
+
+  const chosenBid = delivery.chosen_driver_id
+    ? bids.find((b) => b.driver_id === delivery.chosen_driver_id) || null
+    : null;
+
+  const hasChosenDriver = !!delivery.chosen_driver_id && !!chosenBid;
+  const isOpen = delivery.status === "OPEN";
+
+  const sellerPaid = !!delivery.seller_marked_paid;
+  const driverConfirmed = !!delivery.driver_confirmed_payment;
+
+  let driverSectionTitle = "Жолоочийн мэдээлэл";
+  if (isOpen && !hasChosenDriver) driverSectionTitle = "Жолоочийн авах хүсэлтүүд";
+
+  const fromTab2 = searchParams.get("tab");
+  const backUrl2 = fromTab2 ? `/seller?tab=${fromTab2}` : "/seller";
+
+  return (
+    <div className="min-h-screen bg-slate-50">
+      <header className="border-b border-slate-200 bg-white">
+        <div className="max-w-3xl mx-auto px-4 py-4 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => router.push(backUrl2)}
+              className="inline-flex sm:hidden items-center justify-center h-8 w-8 rounded-full border border-slate-200 text-slate-600 hover:bg-slate-50"
+            >
+              ←
+            </button>
+
+            <div>
+              <div className="inline-flex items-center gap-1 rounded-full border border-slate-100 bg-slate-50 px-2 py-0.5">
+                <span className="text-xs text-slate-600">Хүргэлтийн дэлгэрэнгүй</span>
+              </div>
+              <div className="mt-1 flex items-center gap-2">
+                <span className="text-sm font-semibold text-slate-900">#{delivery.id.slice(0, 6)}</span>
+                <span className={"inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium " + sb.className}>
+                  {sb.text}
+                </span>
+              </div>
+              <p className="text-xs text-slate-500 mt-0.5">Үүсгэсэн: {formatDateTime(delivery.created_at)}</p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => router.push(backUrl2)}
+              className="hidden sm:inline-flex text-[11px] px-3 py-1.5 rounded-full border border-slate-200 text-slate-600 hover:bg-slate-50"
+            >
+              ← Буцах
+            </button>
+            <button
+              onClick={handleLogout}
+              className="text-[11px] px-3 py-1.5 rounded-full border border-slate-200 text-slate-700 hover:bg-slate-50"
+            >
+              Гарах
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <main className="max-w-3xl mx-auto px-4 py-5 space-y-4">
+        {delivery.status === "DISPUTE" && (
+          <div className="rounded-2xl border border-rose-100 bg-rose-50 px-4 py-3 text-xs text-rose-800">
+            Энэ хүргэлт дээр <span className="font-semibold">маргаан</span> нээгдсэн.
+            {delivery.dispute_reason ? (
+              <div className="mt-2 text-[11px] text-rose-700">
+                Шалтгаан: <span className="font-semibold">{delivery.dispute_reason}</span>
+              </div>
+            ) : null}
+          </div>
+        )}
+
+        {message && (
+          <div className="rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-2 text-xs text-emerald-800">
+            {message}
+          </div>
+        )}
+
+        {error && (
+          <div className="rounded-2xl border border-rose-100 bg-rose-50 px-4 py-2 text-xs text-rose-700">
+            {error}
+          </div>
+        )}
+
+        {/* Карт 1 */}
+        <section className="rounded-2xl border border-slate-200 bg-white px-4 py-4 space-y-3">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 text-xs">
+              <span>{t.icon}</span>
+              <span className="font-medium text-slate-800">{t.label}</span>
+            </div>
+            <div className="text-sm font-semibold text-slate-900">{formatPrice(delivery.price_mnt)}</div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs text-slate-600">
+            <div>
+              <div className="text-[11px] font-semibold text-slate-500">АВАХ ХАЯГ</div>
+              <p className="mt-1">{shorten(delivery.from_address)}</p>
+            </div>
+            <div>
+              <div className="text-[11px] font-semibold text-slate-500">ХҮРГЭХ ХАЯГ</div>
+              <p className="mt-1">{shorten(delivery.to_address)}</p>
+            </div>
+          </div>
+
+          {delivery.note && (
+            <div className="pt-2 border-t border-slate-100">
+              <div className="text-[11px] font-semibold text-slate-500">ЮУ ХҮРГЭХ ВЭ?</div>
+              <p className="mt-1 text-xs text-slate-700">{delivery.note}</p>
+            </div>
+          )}
+        </section>
+
+        {/* Карт 2 – Жолооч / санал */}
+        <section className="rounded-2xl border border-slate-200 bg-white px-4 py-4 space-y-3">
+          <div className="flex items-center justify-between gap-2">
+            <h2 className="text-sm font-semibold text-slate-900">{driverSectionTitle}</h2>
+            <div className="flex items-center gap-2">
+              {isOpen && !hasChosenDriver && <span className="text-[11px] text-slate-500">Нийт: {bids.length}</span>}
+              {hasChosenDriver && (
+                <button
+                  type="button"
+                  onClick={() => setShowDriverInfoModal(true)}
+                  className="text-[11px] px-3 py-1.5 rounded-full border border-slate-200 text-slate-600 hover:bg-slate-50"
+                >
+                  Жолоочийн дэлгэрэнгүй
+                </button>
+              )}
+            </div>
+          </div>
+
+          {hasChosenDriver ? (
+            <div className="rounded-2xl border border-emerald-300 bg-emerald-50/60 px-3 py-3 flex items-center justify-between gap-3">
+              <div className="space-y-1 text-xs text-slate-700">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="font-semibold">{chosenBid?.driver?.name || "Жолооч"}</span>
+                  <span className="text-[10px] rounded-full bg-emerald-600 text-white px-2 py-0.5">
+                    {delivery.status === "ON_ROUTE" || delivery.status === "DELIVERED"
+                      ? "Энэ хүргэлтийг хийж буй жолооч"
+                      : "Сонгосон жолооч"}
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-500">Утас: {chosenBid?.driver?.phone || "утасны дугаар бүртгэгдээгүй"}</p>
+                <p className="text-[11px] text-slate-500">{driverRatingText(chosenBid?.driver || null)}</p>
+                <p className="text-[10px] text-slate-400">Санал илгээсэн: {formatDateTime(chosenBid?.created_at || "")}</p>
+              </div>
+            </div>
+          ) : isOpen ? (
+            bids.length === 0 ? (
+              <p className="text-xs text-slate-500">Одоогоор жолооч авах хүсэлт илгээгээгүй байна.</p>
+            ) : (
+              <div className="space-y-2">
+                {bids.map((bid) => {
+                  const disabled = assigningId === bid.driver_id || !!delivery.chosen_driver_id;
+
+                  return (
+                    <div
+                      key={bid.id}
+                      className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 flex items-center justify-between gap-3"
+                    >
+                      <div className="space-y-1 text-xs text-slate-700">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-semibold">{bid.driver?.name || "Жолооч"}</span>
+                        </div>
+                        <p className="text-[11px] text-slate-500">Утас: {bid.driver?.phone || "утасны дугаар бүртгэгдээгүй"}</p>
+                        <p className="text-[11px] text-slate-500">{driverRatingText(bid.driver)}</p>
+                        <p className="text-[10px] text-slate-400">Санал илгээсэн: {formatDateTime(bid.created_at)}</p>
+                      </div>
+
+                      <div className="flex flex-col items-end gap-1">
+                        <button
+                          onClick={() => handleSelectDriver(bid.driver_id)}
+                          disabled={disabled}
+                          className="text-[11px] px-3 py-1.5 rounded-full bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-60"
+                        >
+                          {assigningId === bid.driver_id ? "Сонгож байна…" : "Энэ жолоочийг сонгох"}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )
+          ) : (
+            <p className="text-xs text-slate-500">Одоогоор жолооч сонгогдоогүй байна.</p>
+          )}
+        </section>
+
+        {/* Карт 3 – Явц / шийдвэр */}
+        <section className="rounded-2xl border border-slate-200 bg-white px-4 py-4 space-y-3">
+          <h2 className="text-sm font-semibold text-slate-900">Хүргэлтийн явц, шийдвэр</h2>
+
+          {/* Маргаан шийдвэрлэх */}
+          {canResolveDisputeFlag && (
+            <div className="flex flex-wrap items-center justify-between gap-2 border border-rose-100 bg-rose-50 rounded-2xl px-3 py-3">
+              <p className="text-xs text-rose-800">
+                Маргаан шийдвэрлэгдсэн бол <span className="font-semibold">“Маргаан шийдвэрлэх”</span> дарж хүргэсэн төлөв рүү буцаана.
+              </p>
+              <button
+                onClick={() => setShowResolveDisputeModal(true)}
+                className="text-[11px] px-4 py-2 rounded-full bg-rose-600 text-white hover:bg-rose-700"
+              >
+                Маргаан шийдвэрлэх
+              </button>
+            </div>
+          )}
+
+          {/* Хүргэлтэд гарсан */}
+          {delivery.status === "ASSIGNED" && delivery.chosen_driver_id && (
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-xs text-slate-600">
+                Жолооч сонгогдсон байна. Жолооч барааг аваад явсан үед <span className="font-medium">“Хүргэлтэд гарсан”</span> гэж тэмдэглэнэ.
+              </p>
+              <button
+                onClick={handleMarkPickedUp}
+                disabled={markingPickedUp}
+                className="text-[11px] px-4 py-2 rounded-full bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-60"
+              >
+                {markingPickedUp ? "Тэмдэглэж байна…" : "Хүргэлтэд гарсан"}
+              </button>
+            </div>
+          )}
+
+          {/* Жолоочийг цуцлах */}
+          {canCancelDriver && (
+            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-3 mt-2">
+              <p className="text-xs text-slate-600">
+                Сонгогдсон жолооч <span className="font-medium">ирээгүй, хэт удсан, утас холбогдохгүй эсвэл харилцаа таалагдаагүй</span> бол жолоочийг цуцлаж, энэ хүргэлтийг дахин нээлттэй болгох боломжтой.
+              </p>
+              <button
+                onClick={() => setShowCancelModal(true)}
+                className="text-[11px] px-4 py-2 rounded-full border border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100"
+              >
+                Жолоочийг цуцлах
+              </button>
+            </div>
+          )}
+
+          {/* Маргаан үүсгэх */}
+          {canOpenDisputeFlag && (
+            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-3 mt-2">
+              <p className="text-xs text-slate-600">
+                Жолооч барааг аваад удаан хугацаанд холбоо барихгүй, хүргэлт гүйцэтгээгүй тохиолдолд{" "}
+                <span className="font-semibold text-rose-700">маргаан нээж</span> болно.
+              </p>
+              <button
+                onClick={() => setShowDisputeModal(true)}
+                className="text-[11px] px-4 py-2 rounded-full border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100"
+              >
+                Маргаан үүсгэх
+              </button>
+            </div>
+          )}
+
+          {/* Төлбөр тэмдэглэх (DELIVERED) */}
+          {delivery.status === "DELIVERED" && (
+            <div className="border-t border-slate-100 pt-3 mt-2 space-y-2">
+              {!sellerPaid ? (
+                <>
+                  <p className="text-xs text-slate-600">
+                    Жолооч барааг хүргэсэн байна. Жолоочид төлбөрөө шилжүүлсний дараа <span className="font-semibold">“Төлбөр төлсөн”</span> гэж тэмдэглэнэ үү.
+                  </p>
+                  <button
+                    onClick={handleSellerPaid}
+                    disabled={payLoading}
+                    className="text-[11px] px-4 py-2 rounded-full bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-60"
+                  >
+                    {payLoading ? "Тэмдэглэж байна…" : "Төлбөр төлсөн"}
+                  </button>
+                </>
+              ) : (
+                <p className="text-xs text-emerald-700">
+                  Та жолоочид төлбөр шилжүүлсэн гэж тэмдэглэсэн. Жолооч төлбөр авснаа баталсны дараа энэ хүргэлт <span className="font-semibold">“Хаагдсан”</span> төлөвт автоматаар шилжинэ.
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* Төлбөрийн суммари */}
+          <div className="border-t border-slate-100 pt-3 mt-2 space-y-1">
+            <p className="text-[11px] text-slate-500">
+              Худалдагч:{" "}
+              <span className={sellerPaid ? "text-emerald-600 font-semibold" : "text-slate-700"}>
+                {sellerPaid ? "Жолоочид мөнгөө шилжүүлсэн" : "Мөнгөө шилжүүлээгүй"}
+              </span>
+            </p>
+            <p className="text-[11px] text-slate-500">
+              Жолооч:{" "}
+              <span className={driverConfirmed ? "text-emerald-600 font-semibold" : "text-slate-700"}>
+                {driverConfirmed ? "Төлбөрөө бүрэн авсан" : "Баталгаажаагүй"}
+              </span>
+            </p>
+            {delivery.closed_at && (
+              <p className="text-[11px] text-slate-400">Хаагдсан: {formatDateTime(delivery.closed_at)}</p>
+            )}
+          </div>
+
+          {delivery.status === "CLOSED" && (
+            <div className="border-t border-slate-100 pt-3 mt-2">
+              <p className="text-xs text-slate-600">
+                Энэ хүргэлт <span className="font-semibold">хаагдсан</span>.
+              </p>
+            </div>
+          )}
+        </section>
+
+        {/* DISPUTE RESOLVE confirm modal */}
+        {showResolveDisputeModal && (
+          <div className="fixed inset-0 z-20 flex items-center justify-center bg-black/30 px-4">
+            <div className="max-w-md w-full rounded-2xl bg-white shadow-lg border border-slate-200 px-4 py-4 space-y-3">
+              <h3 className="text-sm font-semibold text-slate-900">Маргаан шийдвэрлэх</h3>
+              <p className="text-xs text-slate-600">
+                Энэ үйлдэл нь маргааныг хааж, хүргэлтийг <span className="font-semibold">“Хүргэсэн”</span> төлөв рүү буцаана.
+              </p>
+
+              <div className="flex items-center justify-end gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setShowResolveDisputeModal(false)}
+                  disabled={resolvingDispute}
+                  className="text-[11px] px-3 py-1.5 rounded-full border border-slate-200 text-slate-600 hover:bg-slate-50"
+                >
+                  Болих
+                </button>
+                <button
+                  type="button"
+                  onClick={handleResolveDispute}
+                  disabled={resolvingDispute}
+                  className="text-[11px] px-3 py-1.5 rounded-full bg-rose-600 text-white hover:bg-rose-700 disabled:opacity-60"
+                >
+                  {resolvingDispute ? "Шийдвэрлэж байна…" : "Шийдвэрлэх"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Driver info modal */}
+        {showDriverInfoModal && hasChosenDriver && chosenBid && (
+          <div className="fixed inset-0 z-20 flex items-center justify-center bg-black/30 px-4">
+            <div className="max-w-md w-full rounded-2xl bg-white shadow-lg border border-slate-200 px-4 py-4 space-y-3">
+              <h3 className="text-sm font-semibold text-slate-900">Жолоочийн мэдээлэл</h3>
+
+              <div className="space-y-1 text-xs text-slate-700">
+                <p>
+                  <span className="font-semibold">Нэр:</span> {chosenBid.driver?.name || "Бүртгэгдээгүй"}
+                </p>
+                <p>
+                  <span className="font-semibold">Утас:</span> {chosenBid.driver?.phone || "утасны дугаар бүртгэгдээгүй"}
+                </p>
+                <p>
+                  <span className="font-semibold">Үнэлгээ:</span> {driverRatingText(chosenBid.driver || null)}
+                </p>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setShowDriverInfoModal(false)}
+                  className="text-[11px] px-3 py-1.5 rounded-full border border-slate-200 text-slate-600 hover:bg-slate-50"
+                >
+                  Хаах
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Dispute modal */}
+        {showDisputeModal && (
+          <div className="fixed inset-0 z-20 flex items-center justify-center bg-black/30 px-4">
+            <div className="max-w-md w-full rounded-2xl bg-white shadow-lg border border-slate-200 px-4 py-4 space-y-3">
+              <h3 className="text-sm font-semibold text-slate-900">Маргаан үүсгэх</h3>
+              <p className="text-xs text-slate-600">Ноцтой зөрчил гарсан үед л маргаан нээнэ.</p>
+              <textarea
+                value={disputeReason}
+                onChange={(e) => setDisputeReason(e.target.value)}
+                rows={4}
+                className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-rose-500 focus:border-rose-500"
+                placeholder="Юу болсон талаар товчхон, тодорхой бичнэ үү…"
+              />
+              <div className="flex items-center justify-end gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setShowDisputeModal(false)}
+                  disabled={openingDispute}
+                  className="text-[11px] px-3 py-1.5 rounded-full border border-slate-200 text-slate-600 hover:bg-slate-50"
+                >
+                  Болих
+                </button>
+                <button
+                  type="button"
+                  onClick={handleOpenDisputeConfirm}
+                  disabled={openingDispute}
+                  className="text-[11px] px-3 py-1.5 rounded-full bg-rose-600 text-white hover:bg-rose-700 disabled:opacity-60"
+                >
+                  {openingDispute ? "Илгээж байна…" : "Маргаан нээх"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Cancel modal */}
+        {showCancelModal && (
+          <div className="fixed inset-0 z-20 flex items-center justify-center bg-black/30 px-4">
+            <div className="max-w-md w-full rounded-2xl bg-white shadow-lg border border-slate-200 px-4 py-4 space-y-3">
+              <h3 className="text-sm font-semibold text-slate-900">Сонгогдсон жолоочийг цуцлах</h3>
+
+              <div className="space-y-1 text-xs text-slate-700">
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={cancelReasons.no_show}
+                    onChange={() => toggleCancelReason("no_show")}
+                    className="h-3 w-3 rounded border-slate-300"
+                  />
+                  <span>Ирээгүй</span>
+                </label>
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={cancelReasons.too_late}
+                    onChange={() => toggleCancelReason("too_late")}
+                    className="h-3 w-3 rounded border-slate-300"
+                  />
+                  <span>Хэт удсан</span>
+                </label>
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={cancelReasons.no_contact}
+                    onChange={() => toggleCancelReason("no_contact")}
+                    className="h-3 w-3 rounded border-slate-300"
+                  />
+                  <span>Утас холбогдохгүй болсон</span>
+                </label>
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={cancelReasons.bad_attitude}
+                    onChange={() => toggleCancelReason("bad_attitude")}
+                    className="h-3 w-3 rounded border-slate-300"
+                  />
+                  <span>Харилцаа таалагдаагүй</span>
+                </label>
+                <div className="pt-1">
+                  <textarea
+                    value={cancelOtherReason}
+                    onChange={(e) => setCancelOtherReason(e.target.value)}
+                    rows={2}
+                    className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-500 focus:border-slate-500"
+                    placeholder="Бусад (заавал биш)…"
+                  />
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setShowCancelModal(false)}
+                  disabled={cancelling}
+                  className="text-[11px] px-3 py-1.5 rounded-full border border-slate-200 text-slate-600 hover:bg-slate-50"
+                >
+                  Болих
+                </button>
+                <button
+                  type="button"
+                  onClick={handleCancelDriverConfirm}
+                  disabled={cancelling}
+                  className="text-[11px] px-3 py-1.5 rounded-full bg-slate-900 text-white hover:bg-slate-800 disabled:opacity-60"
+                >
+                  {cancelling ? "Цуцалж байна…" : "Жолоочийг цуцлах"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </main>
+    </div>
+  );
+}
+----- END FILE 009 -----
+
+==========================================================================================
+[010] PATH: .\app\seller\new-delivery\page.tsx
+CHARS: 9295
+----- BEGIN FILE 010 -----
+"use client";
+
+import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import { supabase } from "@/lib/supabase";
+
+type Role = "seller" | "driver";
+
+type IncomeUser = {
+  id: string;
+  role: Role;
+  name: string;
+  phone: string;
+  email: string;
+};
+
+export default function NewDeliveryPage() {
+  const router = useRouter();
+
+  const [user, setUser] = useState<IncomeUser | null>(null);
+
+  const [deliveryType, setDeliveryType] = useState("apartment");
+  const [fromAddress, setFromAddress] = useState("");
+  const [toAddress, setToAddress] = useState("");
+  const [receiverPhone, setReceiverPhone] = useState("");
+  const [note, setNote] = useState("");
+  const [price, setPrice] = useState("");
+
+  const [loadingUser, setLoadingUser] = useState(true);
+  const [sending, setSending] = useState(false);
+
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState(false);
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem("incomeUser");
+      if (!raw) {
+        router.replace("/");
+        return;
+      }
+
+      const parsed: IncomeUser = JSON.parse(raw);
+
+      if (parsed.role !== "seller") {
+        router.replace("/driver");
+        return;
+      }
+
+      setUser(parsed);
+
+      // 🧠 АВАХ хаягийн сүүлийн утгыг автоматаар дүүргэх
+      const savedFrom = window.localStorage.getItem(
+        "incomeLastFromAddress"
+      );
+      if (savedFrom && savedFrom.trim().length > 0) {
+        setFromAddress(savedFrom);
+      }
+
+      setLoadingUser(false);
+    } catch (e) {
+      console.error(e);
+      setError("Хэрэглэгчийн мэдээлэл уншихад алдаа гарлаа.");
+      setLoadingUser(false);
+    }
+  }, []);
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!user) return;
+
+    setError(null);
+    setSuccess(false);
+
+    if (!fromAddress.trim()) {
+      setError("АВАХ хаяг хоосон байна.");
+      return;
+    }
+    if (!toAddress.trim()) {
+      setError("ХҮРГЭХ хаяг хоосон байна.");
+      return;
+    }
+    if (!receiverPhone.trim()) {
+      setError("ХҮЛЭЭН АВАХ хүний утас заавал.");
+      return;
+    }
+    if (!price.trim() || isNaN(Number(price))) {
+      setError("Үнэ (₮) зөв оруулна уу.");
+      return;
+    }
+
+    try {
+      setSending(true);
+
+      const { error: insertError } = await supabase
+        .from("deliveries")
+        .insert({
+          seller_id: user.id,
+          delivery_type: deliveryType,
+          from_address: fromAddress,
+          to_address: toAddress,
+          receiver_phone: receiverPhone,
+          note,
+          price_mnt: Number(price),
+          status: "OPEN",
+        });
+
+      if (insertError) {
+        console.error(insertError);
+        setError("Хүргэлтийн мэдээлэл илгээхэд алдаа гарлаа.");
+        setSending(false);
+        return;
+      }
+
+      // ✅ Амжилттай илгээсний дараа АВАХ хаягийг санах
+      window.localStorage.setItem(
+        "incomeLastFromAddress",
+        fromAddress
+      );
+
+      setSuccess(true);
+
+      setTimeout(() => {
+        router.push("/seller");
+      }, 900);
+    } catch (err) {
+      console.error(err);
+      setError("Сервертэй холбогдоход алдаа гарлаа.");
+    } finally {
+      setSending(false);
+    }
+  }
+
+  if (loadingUser) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+        <div className="text-slate-500 text-sm">Ачаалж байна…</div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+        <div className="text-slate-500 text-sm">Нэвтрээгүй байна.</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-slate-50">
+      <header className="border-b border-slate-200 bg-white">
+  <div className="max-w-3xl mx-auto px-4 py-4">
+    <div className="flex items-center gap-3">
+      <div className="inline-flex items-center justify-center rounded-full bg-emerald-50 px-3 py-1">
+        <span className="text-xs font-semibold text-emerald-700">
+          INCOME
+        </span>
+      </div>
+
+      <div>
+        <h1 className="text-sm font-semibold text-slate-900">
+          Хүргэлт үүсгэх
+        </h1>
+        <p className="text-xs text-slate-500">
+          Мэдээллээ үнэн зөв бөглөөд илгээгээрэй.
+        </p>
+      </div>
+    </div>
+
+    {/* ← Буцах */}
+    <button
+      onClick={() => router.push("/seller")}
+      className="mt-3 text-xs px-3 py-1.5 rounded-full border border-slate-200 text-slate-600 hover:bg-slate-50"
+    >
+      ← Буцах
+    </button>
+  </div>
+</header>
+
+
+      <main className="max-w-3xl mx-auto px-4 py-6 space-y-5">
+        {error && (
+          <div className="text-xs text-red-600 bg-red-50 border border-red-100 rounded-xl px-3 py-2">
+            {error}
+          </div>
+        )}
+
+        {success && (
+          <div className="text-xs text-emerald-600 bg-emerald-50 border border-emerald-100 rounded-xl px-3 py-2">
+            Хүргэлт амжилттай үүсгэгдлээ!
+          </div>
+        )}
+
+        <form onSubmit={handleSubmit} className="space-y-5">
+          {/* Хүргэлтийн төрөл */}
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-slate-800">
+              Хүргэлтийн төрөл
+            </label>
+            <select
+              value={deliveryType}
+              onChange={(e) => setDeliveryType(e.target.value)}
+              className="w-full border border-slate-300 rounded-xl px-3 py-2 text-sm"
+            >
+              <option value="apartment">🏙 Байр</option>
+              <option value="ger">🏠 Гэр хороолол</option>
+              <option value="camp">🏕 Лагер</option>
+              <option value="countryside">
+                🚌 Орон нутаг (унаанд тавих)
+              </option>
+            </select>
+          </div>
+
+          {/* Үнэ */}
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-slate-800">
+              Үнэ (₮)
+            </label>
+            <input
+              type="number"
+              inputMode="numeric"
+              className="w-full border border-slate-300 rounded-xl px-3 py-2 text-sm"
+              placeholder="Ж: 5000"
+              value={price}
+              onChange={(e) => setPrice(e.target.value)}
+            />
+          </div>
+
+          {/* Авах хаяг */}
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-slate-800">
+              АВАХ хаяг
+            </label>
+            <input
+              type="text"
+              className="w-full border border-slate-300 rounded-xl px-3 py-2 text-sm"
+              placeholder="Ж: БГД, 3-р хороо, 5-р хороолол…"
+              value={fromAddress}
+              onChange={(e) => setFromAddress(e.target.value)}
+            />
+            <p className="text-[11px] text-slate-400">
+              Энэ нь ихэвчлэн өөрчлөгдөхгүй (танай дэлгүүр/агуулах). Нэг
+              удаа бөглөсний дараа дараагийн хүргэлтүүдэд автоматаар
+              гарч ирнэ.
+            </p>
+          </div>
+
+          {/* Хүргэх хаяг */}
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-slate-800">
+              ХҮРГЭХ хаяг
+            </label>
+            <input
+              type="text"
+              className="w-full border border-slate-300 rounded-xl px-3 py-2 text-sm"
+              placeholder="Ж: СБД, 6-р хороо, Энх тайвны өргөн чөлөө…"
+              value={toAddress}
+              onChange={(e) => setToAddress(e.target.value)}
+            />
+          </div>
+
+          {/* Хүлээн авагч */}
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-slate-800">
+              ХҮЛЭЭН АВАХ хүний утас
+            </label>
+            <input
+              type="text"
+              className="w-full border border-slate-300 rounded-xl px-3 py-2 text-sm"
+              placeholder="Ж: 9911XXXX"
+              value={receiverPhone}
+              onChange={(e) => setReceiverPhone(e.target.value)}
+            />
+          </div>
+
+          {/* Юу хүргүүлэх */}
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-slate-800">
+              Юу хүргүүлэх гэж байгаа (товч)
+            </label>
+            <textarea
+              className="w-full border border-slate-300 rounded-xl px-3 py-2 text-sm h-20"
+              placeholder="Ж: 2 хайрцаг ус, 1 тоног төхөөрөмж…"
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+            />
+          </div>
+
+          {/* Илгээх */}
+          <div>
+            <button
+              type="submit"
+              disabled={sending}
+              className="w-full rounded-xl bg-emerald-600 text-white text-sm font-medium px-4 py-2 hover:bg-emerald-700 disabled:bg-emerald-400 transition"
+            >
+              {sending ? "Илгээж байна…" : "Хүргэлт үүсгэх"}
+            </button>
+          </div>
+        </form>
+      </main>
+    </div>
+  );
+}
+----- END FILE 010 -----
+
+==========================================================================================
+[011] PATH: .\app\seller\page.tsx
+CHARS: 15563
+----- BEGIN FILE 011 -----
+"use client";
+
+/* ===========================
+ * app/seller/page.tsx
+ * CLEAN:
+ * - OPEN дээр driver_bids count харуулна
+ * - Tab дараалал lib/deliveryLogic.ts-тэй таарсан
+ * - ✅ Quick action: ASSIGNED дээр "Хүргэлтэд гарсан" товч (ON_ROUTE + redirect)
+ * =========================== */
+
+import { useEffect, useMemo, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { supabase } from "@/lib/supabase";
+import { DeliveryStatus, SELLER_TABS, SellerTabId } from "@/lib/deliveryLogic";
+
+type Role = "seller" | "driver";
+
+type IncomeUser = {
+  id: string;
+  role: Role;
+  name: string;
+  phone: string;
+  email: string;
+};
+
+type DeliveryRow = {
+  id: string;
+  seller_id: string;
+  from_address: string | null;
+  to_address: string | null;
+  note: string | null;
+  status: DeliveryStatus;
+  created_at: string;
+  price_mnt: number | null;
+  delivery_type: string | null;
+
+  seller_marked_paid: boolean | null;
+  driver_confirmed_payment: boolean | null;
+  closed_at: string | null;
+
+  seller_hidden: boolean | null;
+  bids_count: number;
+
+  chosen_driver_id: string | null;
+};
+
+const TAB_IDS: SellerTabId[] = SELLER_TABS.map((t) => t.id);
+
+/* ---------- helpers ---------- */
+function typeLabel(deliveryType: string | null) {
+  switch (deliveryType) {
+    case "apartment":
+      return { icon: "🏙", label: "Байр" };
+    case "ger":
+      return { icon: "🏠", label: "Гэр хороолол" };
+    case "camp":
+      return { icon: "🏕", label: "Лагер" };
+    case "countryside":
+      return { icon: "🚌", label: "Орон нутаг" };
+    default:
+      return { icon: "📦", label: "Хүргэлт" };
+  }
+}
+
+function statusBadge(status: DeliveryStatus) {
+  switch (status) {
+    case "OPEN":
+      return {
+        text: "Нээлттэй",
+        className: "bg-emerald-50 text-emerald-700 border-emerald-100",
+      };
+    case "ASSIGNED":
+      return {
+        text: "Жолооч сонгосон",
+        className: "bg-sky-50 text-sky-700 border-sky-100",
+      };
+    case "ON_ROUTE":
+      return {
+        text: "Замд",
+        className: "bg-indigo-50 text-indigo-700 border-indigo-100",
+      };
+    case "DELIVERED":
+      return {
+        text: "Хүргэсэн",
+        className: "bg-slate-900 text-white border-slate-900",
+      };
+    case "DISPUTE":
+      return {
+        text: "Маргаан",
+        className: "bg-rose-50 text-rose-700 border-rose-100",
+      };
+    case "CLOSED":
+      return {
+        text: "Хаагдсан",
+        className: "bg-emerald-900 text-emerald-50 border-emerald-900",
+      };
+    case "CANCELLED":
+      return {
+        text: "Цуцалсан",
+        className: "bg-rose-50 text-rose-700 border-rose-100",
+      };
+    default:
+      return {
+        text: status,
+        className: "bg-slate-50 text-slate-600 border-slate-100",
+      };
+  }
+}
+
+function shorten(s: string | null, max = 110) {
+  if (!s) return "";
+  const t = s.trim();
+  if (t.length <= max) return t;
+  return t.slice(0, max).replace(/\s+$/, "") + "…";
+}
+
+function formatPrice(n: number | null) {
+  if (!n) return "Үнэ тохиролцоно";
+  return n.toLocaleString("mn-MN") + "₮";
+}
+
+function formatDateTime(iso: string) {
+  const d = new Date(iso);
+  return (
+    d.toLocaleDateString("mn-MN", { month: "2-digit", day: "2-digit" }) +
+    " " +
+    d.toLocaleTimeString("mn-MN", { hour: "2-digit", minute: "2-digit" })
+  );
+}
+
+function filterByTab(tab: SellerTabId, items: DeliveryRow[]) {
+  return items.filter((d) => {
+    switch (tab) {
+      case "OPEN":
+        return d.status === "OPEN";
+      case "ASSIGNED":
+        return d.status === "ASSIGNED";
+      case "ON_ROUTE":
+        return d.status === "ON_ROUTE";
+      case "DELIVERED":
+        return d.status === "DELIVERED";
+      case "DISPUTE":
+        return d.status === "DISPUTE";
+      case "CLOSED":
+        return d.status === "CLOSED" || d.status === "CANCELLED";
+      default:
+        return true;
+    }
+  });
+}
+
+/* =========================== */
+
+export default function SellerDashboardPage() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+
+  const [user, setUser] = useState<IncomeUser | null>(null);
+  const [loadingUser, setLoadingUser] = useState(true);
+
+  const [deliveries, setDeliveries] = useState<DeliveryRow[]>([]);
+  const [loadingList, setLoadingList] = useState(true);
+
+  const [activeTab, setActiveTab] = useState<SellerTabId>("OPEN");
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  // ✅ Quick action loading: deliveryId -> boolean
+  const [quickLoading, setQuickLoading] = useState<Record<string, boolean>>({});
+
+  const filtered = useMemo(
+    () => filterByTab(activeTab, deliveries),
+    [activeTab, deliveries]
+  );
+
+  const tabCounts = useMemo(() => {
+    return SELLER_TABS.reduce((acc, t) => {
+      acc[t.id] = filterByTab(t.id, deliveries).length;
+      return acc;
+    }, {} as Record<SellerTabId, number>);
+  }, [deliveries]);
+
+  /* ---------- auth ---------- */
+  useEffect(() => {
+    const raw = window.localStorage.getItem("incomeUser");
+    if (!raw) {
+      router.replace("/");
+      return;
+    }
+    const parsed: IncomeUser = JSON.parse(raw);
+    if (parsed.role !== "seller") {
+      router.replace("/");
+      return;
+    }
+    setUser(parsed);
+    setLoadingUser(false);
+  }, [router]);
+
+  /* ---------- tab init ---------- */
+  useEffect(() => {
+    const urlTab = searchParams.get("tab");
+    if (urlTab && TAB_IDS.includes(urlTab as SellerTabId)) {
+      setActiveTab(urlTab as SellerTabId);
+      localStorage.setItem("sellerActiveTab", urlTab);
+      return;
+    }
+    const stored = localStorage.getItem("sellerActiveTab");
+    if (stored && TAB_IDS.includes(stored as SellerTabId)) {
+      setActiveTab(stored as SellerTabId);
+    }
+  }, [searchParams]);
+
+  function changeTab(tab: SellerTabId) {
+    setActiveTab(tab);
+    localStorage.setItem("sellerActiveTab", tab);
+    router.push(`/seller?tab=${tab}`);
+  }
+
+  /* ---------- fetch ---------- */
+  useEffect(() => {
+    if (!user) return;
+    void fetchDeliveries(user.id);
+  }, [user]);
+
+  async function fetchDeliveries(sellerId: string) {
+    try {
+      setLoadingList(true);
+      setError(null);
+
+      const { data, error } = await supabase
+        .from("deliveries")
+        .select(
+          `
+          id,
+          seller_id,
+          from_address,
+          to_address,
+          note,
+          status,
+          created_at,
+          price_mnt,
+          delivery_type,
+          seller_marked_paid,
+          driver_confirmed_payment,
+          closed_at,
+          seller_hidden,
+          chosen_driver_id,
+          driver_bids(count)
+        `
+        )
+        .eq("seller_id", sellerId)
+        .eq("seller_hidden", false)
+        .order("created_at", { ascending: false });
+
+      if (error) throw error;
+
+      const rows: DeliveryRow[] = (data || []).map((d: any) => ({
+        id: d.id,
+        seller_id: d.seller_id,
+        from_address: d.from_address,
+        to_address: d.to_address,
+        note: d.note,
+        status: d.status,
+        created_at: d.created_at,
+        price_mnt: d.price_mnt,
+        delivery_type: d.delivery_type,
+        seller_marked_paid: !!d.seller_marked_paid,
+        driver_confirmed_payment: !!d.driver_confirmed_payment,
+        closed_at: d.closed_at,
+        seller_hidden: !!d.seller_hidden,
+        chosen_driver_id: d.chosen_driver_id ?? null,
+        bids_count:
+          Array.isArray(d.driver_bids) && d.driver_bids[0]?.count
+            ? Number(d.driver_bids[0].count)
+            : 0,
+      }));
+
+      setDeliveries(rows);
+    } catch {
+      setError("Хүргэлтийн жагсаалт татахад алдаа гарлаа.");
+      setDeliveries([]);
+    } finally {
+      setLoadingList(false);
+    }
+  }
+
+  /* ✅ QUICK: ASSIGNED -> ON_ROUTE + redirect */
+  async function handleQuickMarkOnRoute(deliveryId: string) {
+    if (!user) return;
+
+    setQuickLoading((prev) => ({ ...prev, [deliveryId]: true }));
+    setError(null);
+    setMessage(null);
+
+    try {
+      const { error } = await supabase
+        .from("deliveries")
+        .update({ status: "ON_ROUTE" })
+        .eq("id", deliveryId)
+        .eq("seller_id", user.id)
+        .eq("status", "ASSIGNED"); // хамгаалалт
+
+      if (error) {
+        console.error(error);
+        setError("“Хүргэлтэд гарсан” тэмдэглэхэд алдаа гарлаа.");
+        return;
+      }
+
+      // UI дээр локал update
+      setDeliveries((prev) =>
+        prev.map((d) => (d.id === deliveryId ? { ...d, status: "ON_ROUTE" } : d))
+      );
+
+      // ✅ ШУУД ON_ROUTE tab руу
+      localStorage.setItem("sellerActiveTab", "ON_ROUTE");
+      router.push("/seller?tab=ON_ROUTE");
+    } finally {
+      setQuickLoading((prev) => ({ ...prev, [deliveryId]: false }));
+    }
+  }
+
+  /* ---------- render ---------- */
+  if (loadingUser || loadingList) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+        <div className="text-sm text-slate-500">Ачаалж байна…</div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+        <div className="text-sm text-slate-500">Хэрэглэгч олдсонгүй.</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-slate-50">
+      <header className="border-b border-slate-200 bg-white">
+        <div className="max-w-3xl mx-auto px-4 py-4 flex items-center justify-between">
+          <h1 className="text-sm font-semibold">Худалдагчийн самбар</h1>
+          <div className="flex gap-2">
+            <button
+              onClick={() => router.push("/seller/new-delivery")}
+              className="text-[11px] px-5 py-2 rounded-full bg-emerald-600 text-white font-semibold"
+            >
+              + Хүргэлт нэмэх
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <main className="max-w-3xl mx-auto px-4 py-5 space-y-4">
+        {message && (
+          <div className="rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-2 text-xs">
+            {message}
+          </div>
+        )}
+        {error && (
+          <div className="rounded-2xl border border-rose-100 bg-rose-50 px-4 py-2 text-xs">
+            {error}
+          </div>
+        )}
+
+        <div className="rounded-2xl border border-slate-200 bg-white px-2 py-2 flex flex-wrap gap-1">
+          {SELLER_TABS.map((tab) => (
+            <button
+              key={tab.id}
+              onClick={() => changeTab(tab.id)}
+              className={
+                "text-[11px] px-3 py-1.5 rounded-full border " +
+                (tab.id === activeTab
+                  ? "bg-emerald-600 text-white border-emerald-600"
+                  : "bg-white text-slate-600 border-slate-200")
+              }
+            >
+              {tab.label}
+              {tabCounts[tab.id] > 0 && (
+                <span className="ml-1">({tabCounts[tab.id]})</span>
+              )}
+            </button>
+          ))}
+        </div>
+
+        <section className="space-y-3">
+          {filtered.length === 0 ? (
+            <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-center text-xs text-slate-500">
+              Энэ таб дээр одоогоор хүргэлт алга байна.
+            </div>
+          ) : (
+            filtered.map((d) => {
+              const t = typeLabel(d.delivery_type);
+              const sb = statusBadge(d.status);
+              const canQuickOnRoute = d.status === "ASSIGNED" && !!d.chosen_driver_id;
+
+              return (
+                <div
+                  key={d.id}
+                  className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 hover:border-emerald-300 hover:shadow-sm transition"
+                >
+                  {/* CARD TOP */}
+                  <button
+                    onClick={() => router.push(`/seller/delivery/${d.id}?tab=${activeTab}`)}
+                    className="w-full text-left"
+                  >
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-semibold">
+                          #{d.id.slice(0, 6)}
+                        </span>
+
+                        <span
+                          className={
+                            "inline-flex rounded-full border px-2 py-0.5 text-[10px] " +
+                            sb.className
+                          }
+                        >
+                          {sb.text}
+                        </span>
+
+                        {d.status === "OPEN" && d.bids_count > 0 && (
+                          <span className="inline-flex rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-800">
+                            Санал: {d.bids_count}
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="flex items-center gap-2 text-[11px] text-slate-600">
+                        <span>{t.icon}</span>
+                        <span className="font-medium">{t.label}</span>
+                        <span>•</span>
+                        <span>{formatPrice(d.price_mnt)}</span>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px] text-slate-600">
+                        <div>
+                          <div className="text-[10px] font-semibold text-slate-500">
+                            АВАХ
+                          </div>
+                          <p>{shorten(d.from_address, 60)}</p>
+                        </div>
+                        <div>
+                          <div className="text-[10px] font-semibold text-slate-500">
+                            ХҮРГЭХ
+                          </div>
+                          <p>{shorten(d.to_address, 60)}</p>
+                        </div>
+                      </div>
+
+                      <p className="text-[10px] text-slate-400">
+                        Үүсгэсэн: {formatDateTime(d.created_at)}
+                      </p>
+                    </div>
+                  </button>
+
+                  {/* QUICK ACTIONS (карт дээр шууд) */}
+                  {canQuickOnRoute && (
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          void handleQuickMarkOnRoute(d.id);
+                        }}
+                        disabled={!!quickLoading[d.id]}
+                        className="text-[11px] px-4 py-2 rounded-full bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-60"
+                      >
+                        {quickLoading[d.id] ? "Тэмдэглэж байна…" : "Хүргэлтэд гарсан"}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            })
+          )}
+        </section>
+      </main>
+    </div>
+  );
+}
+----- END FILE 011 -----
+
+==========================================================================================
+[012] PATH: .\lib\deliveryLogic.ts
+CHARS: 3602
+----- BEGIN FILE 012 -----
+// ===================== lib/deliveryLogic.ts =====================
+// Хүргэлтийн статус, табуудын төвлөрсөн логик
+// - PAID статус / таб ашиглахгүй
+// - Төлбөрийн тохироо: DELIVERED дээр seller_marked_paid + driver_confirmed_payment хоёулаа true бол CLOSED болно.
+
+export type DeliveryStatus =
+  | "OPEN"
+  | "ASSIGNED"
+  | "ON_ROUTE"
+  | "DELIVERED"
+  | "DISPUTE"
+  | "CLOSED"
+  | "CANCELLED";
+
+// ---------- SELLER TABS ----------
+
+export type SellerTabId =
+  | "OPEN"
+  | "ASSIGNED"
+  | "ON_ROUTE"
+  | "DELIVERED"
+  | "DISPUTE"
+  | "CLOSED";
+
+export const SELLER_TABS: { id: SellerTabId; label: string }[] = [
+  { id: "OPEN", label: "Нээлттэй" },
+  { id: "ASSIGNED", label: "Жолооч сонгосон" },
+  { id: "ON_ROUTE", label: "Замд" },
+  { id: "DELIVERED", label: "Хүргэсэн" },
+  { id: "DISPUTE", label: "Маргаан" },
+  { id: "CLOSED", label: "Хаагдсан" },
+];
+
+// ---------- DRIVER TABS ----------
+
+export type DriverTabId =
+  | "OPEN"
+  | "ASSIGNED"
+  | "ON_ROUTE"
+  | "DELIVERED"
+  | "CLOSED"
+  | "DISPUTE";
+
+export const DRIVER_TABS: { id: DriverTabId; label: string }[] = [
+  { id: "OPEN", label: "Нээлттэй" },
+  { id: "ASSIGNED", label: "Намайг сонгосон" },
+  { id: "ON_ROUTE", label: "Замд" },
+  { id: "DELIVERED", label: "Хүргэсэн" },
+  { id: "CLOSED", label: "Хаагдсан" },
+  { id: "DISPUTE", label: "Маргаантай" }, // ✅ хамгийн сүүлд
+];
+
+// ---------- ТУСЛАХ ----------
+
+// Статусыг монголоор
+export function statusLabel(status: DeliveryStatus): string {
+  switch (status) {
+    case "OPEN":
+      return "Нээлттэй";
+    case "ASSIGNED":
+      return "Жолооч сонгосон";
+    case "ON_ROUTE":
+      return "Замд";
+    case "DELIVERED":
+      return "Хүргэсэн";
+    case "DISPUTE":
+      return "Маргаан";
+    case "CLOSED":
+      return "Хаагдсан";
+    case "CANCELLED":
+      return "Цуцалсан";
+    default:
+      return status;
+  }
+}
+
+// Хаалттай ангилал
+export function isClosedStatus(status: DeliveryStatus): boolean {
+  return status === "CLOSED" || status === "CANCELLED";
+}
+
+// Status → SellerTab
+export function getSellerTabForStatus(status: DeliveryStatus): SellerTabId {
+  switch (status) {
+    case "OPEN":
+      return "OPEN";
+    case "ASSIGNED":
+      return "ASSIGNED";
+    case "ON_ROUTE":
+      return "ON_ROUTE";
+    case "DELIVERED":
+      return "DELIVERED";
+    case "DISPUTE":
+      return "DISPUTE";
+    case "CLOSED":
+    case "CANCELLED":
+      return "CLOSED";
+  }
+}
+
+// Status → DriverTab
+export function getDriverTabForStatus(status: DeliveryStatus): DriverTabId {
+  switch (status) {
+    case "OPEN":
+      return "OPEN";
+    case "ASSIGNED":
+      return "ASSIGNED";
+    case "ON_ROUTE":
+      return "ON_ROUTE";
+    case "DELIVERED":
+      return "DELIVERED";
+    case "CLOSED":
+    case "CANCELLED":
+      return "CLOSED";
+    case "DISPUTE":
+      return "DISPUTE";
+  }
+}
+
+// CLOSED болох ёстой эсэх (товч нэг газар)
+// ✅ зөвхөн DELIVERED дээр 2 талын төлбөр батлагдвал хаагдана
+export function shouldCloseDelivery(input: {
+  status: DeliveryStatus;
+  seller_marked_paid: boolean;
+  driver_confirmed_payment: boolean;
+}): boolean {
+  return (
+    input.status === "DELIVERED" &&
+    !!input.seller_marked_paid &&
+    !!input.driver_confirmed_payment
+  );
+}
+
+// ---------- Маргаан нээх боломж ----------
+// ✅ Жолооч тал: ON_ROUTE эсвэл DELIVERED үед (танай Driver detail логиктой тааруулсан)
+export function canOpenDisputeForDriver(status: DeliveryStatus): boolean {
+  return status === "ON_ROUTE" || status === "DELIVERED";
+}
+----- END FILE 012 -----
+
+==========================================================================================
+[013] PATH: .\lib\supabase.ts
+CHARS: 208
+----- BEGIN FILE 013 -----
+// lib/supabase.ts
+import { createClient } from "@supabase/supabase-js";
+
+export const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+);
+----- END FILE 013 -----
+
+==========================================================================================
+[014] PATH: .\lib\types.ts
+CHARS: 214
+----- BEGIN FILE 014 -----
+// lib/types.ts
+// Апп даяар ашиглах үндсэн төрлүүд
+
+export type Role = "seller" | "driver";
+
+export type IncomeUser = {
+  id: string;
+  role: Role;
+  name: string;
+  phone: string;
+  email: string;
+};
+----- END FILE 014 -----
+
+
