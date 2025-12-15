@@ -1,9 +1,17 @@
 ﻿BUNDLE__CODE_ONLY
 Root: F:\khurgelt
 Mode: full
-Generated: 2025-12-15 19:01:25
-Files: 16
+Generated: 2025-12-15 23:12:01
+Files: 18
 ================================================================================
+
+# FILE: F:\khurgelt\app\components\Map\DeliveryRouteMap.tsx
+# ERROR: Method invocation failed because [System.IO.Path] does not contain a method named 'GetRelativePath'.
+
+
+# FILE: F:\khurgelt\app\components\Map\useCurvedLine.ts
+# ERROR: Method invocation failed because [System.IO.Path] does not contain a method named 'GetRelativePath'.
+
 
 # FILE: F:\khurgelt\app\driver\delivery\[id]\page.tsx
 # ERROR: Method invocation failed because [System.IO.Path] does not contain a method named 'GetRelativePath'.
@@ -72,4 +80,4 @@ Files: 16
 ================================================================================
 Written: 0
 SkippedBinary: 0
-SkippedErrors: 16
+SkippedErrors: 18
