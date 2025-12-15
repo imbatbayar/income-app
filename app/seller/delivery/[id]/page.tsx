@@ -7,10 +7,7 @@
 import { useEffect, useState } from "react";
 import { useRouter, useParams, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
-import {
-  DeliveryStatus,
-  canOpenDisputeForSeller,
-} from "@/lib/deliveryLogic";
+import { DeliveryStatus } from "@/lib/deliveryLogic";
 
 /* ===========================
  * BLOCK 2 — TYPES
@@ -103,11 +100,6 @@ function statusBadge(status: DeliveryStatus) {
       return {
         text: "Хүргэсэн",
         className: "bg-slate-900 text-white border-slate-900",
-      };
-    case "PAID":
-      return {
-        text: "Төлбөр тэмдэглэсэн",
-        className: "bg-emerald-50 text-emerald-700 border-emerald-100",
       };
     case "CLOSED":
       return {
@@ -203,7 +195,6 @@ export default function SellerDeliveryDetailPage() {
   const [showDisputeModal, setShowDisputeModal] = useState(false);
   const [disputeReason, setDisputeReason] = useState("");
   const [openingDispute, setOpeningDispute] = useState(false);
-  const [resolvingDispute] = useState(false); // одоохондоо ашиглахгүй ч үлдээе
 
   // Сонгогдсон жолоочийг цуцлах
   const [showCancelModal, setShowCancelModal] = useState(false);
@@ -456,10 +447,12 @@ export default function SellerDeliveryDetailPage() {
    * BLOCK 10 — DISPUTE OPEN (Маргаан нээх)
    * =========================== */
 
+  // Худалдагчийн хувьд: жолооч замд гарсан (ON_ROUTE) боловч хүргэхгүй,
+  // алга болоод байвал маргаан нээх боломжтой.
   const canOpenDisputeFlag =
     !!delivery &&
     !!delivery.chosen_driver_id &&
-    canOpenDisputeForSeller(delivery.status);
+    delivery.status === "ON_ROUTE";
 
   async function handleOpenDisputeConfirm() {
     if (!delivery || !user || !delivery.chosen_driver_id) return;
@@ -600,13 +593,8 @@ export default function SellerDeliveryDetailPage() {
   async function handleCloseDelivery() {
     if (!delivery || !user) return;
 
-    if (
-      !(
-        delivery.status === "DELIVERED" ||
-        delivery.status === "PAID" ||
-        delivery.status === "CLOSED"
-      )
-    ) {
+    // Үнэлгээ өгөх боломж: Хүргэсэн эсвэл хэдийн хаагдсан хүргэлт
+    if (!(delivery.status === "DELIVERED" || delivery.status === "CLOSED")) {
       setMessage("Энэ хүргэлт одоогоор бүрэн дуусаагүй байна.");
       return;
     }
@@ -652,23 +640,18 @@ export default function SellerDeliveryDetailPage() {
    * BLOCK 13 — SELLER PAID TOGGLE
    * =========================== */
 
-  async function handleSellerPaid() {
+    async function handleSellerPaid() {
     if (!delivery || !user) return;
 
-    if (
-      !(
-        delivery.status === "DELIVERED" ||
-        delivery.status === "PAID" ||
-        delivery.status === "CLOSED"
-      )
-    ) {
-      setError("Зөвхөн хүргэсэн хүргэлт дээр төлбөр тэмдэглэнэ.");
+    // Хаагдсан хүргэлтийн төлбөрийг буцааж засахгүй
+    if (delivery.status === "CLOSED") {
+      setError("Хаагдсан хүргэлтийн төлбөрийн мэдээллийг засах боломжгүй.");
       return;
     }
 
-    // Хаагдсан хүргэлт дээр буцааж засахыг хориглоё
-    if (delivery.status === "CLOSED") {
-      setError("Хаагдсан хүргэлтийн төлбөрийн мэдээллийг засах боломжгүй.");
+    // Зөвхөн хүргэсэн хүргэлт дээр төлбөр тэмдэглэнэ
+    if (delivery.status !== "DELIVERED") {
+      setError("Зөвхөн хүргэсэн хүргэлт дээр төлбөр тэмдэглэнэ.");
       return;
     }
 
@@ -683,17 +666,17 @@ export default function SellerDeliveryDetailPage() {
       let newClosedAt: string | null = delivery.closed_at;
 
       if (newSellerMarked) {
-        // Төлбөрөө шилжүүллээ
+        // Төлбөрөө шилжүүллээ. Жолооч тал бас баталсан бол бүрэн хаана.
         if (delivery.driver_confirmed_payment) {
           newStatus = "CLOSED";
           newClosedAt = new Date().toISOString();
         } else {
-          newStatus = "PAID";
+          // Жолооч хараахан баталгаажаагүй → статус DELIVERED хэвээр
+          newStatus = "DELIVERED";
         }
       } else {
-        // Төлбөрөө шилжүүлсэн тэмдэглэгээг буцааж байна
+        // "Төлсөн" гэсэн тэмдэглэгээг буцаав → статусаа DELIVERED дээр нь үлдээнэ
         newStatus = "DELIVERED";
-        // closed_at-г өөрчлөхгүй (heregtei bol null болгож болно)
       }
 
       const { error } = await supabase
@@ -1098,14 +1081,14 @@ export default function SellerDeliveryDetailPage() {
             </div>
           )}
 
-          {/* Төлбөр тэмдэглэх (DELIVERED/PAID) */}
-          {(delivery.status === "DELIVERED" || delivery.status === "PAID") && (
+          {/* Төлбөр тэмдэглэх (DELIVERED) */}
+          {delivery.status === "DELIVERED" && (
             <div className="border-t border-slate-100 pt-3 mt-2 space-y-2">
               {!sellerPaid ? (
                 <>
                   <p className="text-xs text-slate-600">
-                    Жолооч барааг хүргэсэн байна. Жолоочид төлбөрөө шилжүүлсний
-                    дараа{" "}
+                    Жолооч барааг хүргэсэн байна. Жолоочид төлбөрөө
+                    шилжүүлсний дараа{" "}
                     <span className="font-semibold">“Төлбөр төлсөн”</span> гэж
                     тэмдэглэнэ үү.
                   </p>
@@ -1130,7 +1113,6 @@ export default function SellerDeliveryDetailPage() {
 
           {/* Үнэлгээ */}
           {(delivery.status === "DELIVERED" ||
-            delivery.status === "PAID" ||
             delivery.status === "CLOSED") &&
             delivery.chosen_driver_id && (
               <div className="border-t border-slate-100 pt-3 mt-2 space-y-3">

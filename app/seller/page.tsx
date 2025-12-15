@@ -37,6 +37,9 @@ type DeliveryRow = {
   seller_marked_paid: boolean | null;
   driver_confirmed_payment: boolean | null;
   closed_at: string | null;
+
+  // 🔹 Шинэ: seller-т харагдах эсэх
+  seller_hidden: boolean | null;
 };
 
 // SELLER_TABS-ийг deliveryLogic доторх тодорхойлолтоос нь шууд ашиглаж байна
@@ -87,11 +90,6 @@ function statusBadge(status: DeliveryStatus) {
       return {
         text: "Хүргэсэн",
         className: "bg-slate-900 text-white border-slate-900",
-      };
-    case "PAID":
-      return {
-        text: "Төлбөр тэмдэглэсэн",
-        className: "bg-emerald-50 text-emerald-700 border-emerald-100",
       };
     case "DISPUTE":
       return {
@@ -148,26 +146,24 @@ function filterByTab(tab: SellerTabId, items: DeliveryRow[]): DeliveryRow[] {
       case "OPEN":
         return d.status === "OPEN";
 
-      case "ASSIGNED":
-        return d.status === "ASSIGNED";
+          case "ASSIGNED":
+      return d.status === "ASSIGNED";
 
-      case "ON_ROUTE":
-        return d.status === "ON_ROUTE";
+    case "ON_ROUTE":
+      return d.status === "ON_ROUTE";
 
-      case "DELIVERED":
-        // Жолооч хүргэсэн гэж дарсан, худалдагч төлбөрөө хараахан тэмдэглээгүй
-        return d.status === "DELIVERED" && !d.seller_marked_paid;
+    case "DELIVERED":
+      // Жолооч хүргэсэн гэж дарсан бүх хүргэлт
+      // (төлбөр төлсөн/төлөөгүйг дотроо icon, текстээр ялгана).
+      return d.status === "DELIVERED";
 
-      case "PAID":
-        // Худалдагч төлбөрөө тэмдэглэсэн, системийн статус PAID,
-        // жолооч баталбал CLOSED рүү орно.
-        return d.status === "PAID" && !d.driver_confirmed_payment;
+    case "DISPUTE":
+      return d.status === "DISPUTE";
 
-      case "DISPUTE":
-        return d.status === "DISPUTE";
+    case "CLOSED":
+      // Хаагдсан болон цуцлагдсан хүргэлтүүдийг хамтад нь харуулъя.
+      return d.status === "CLOSED" || d.status === "CANCELLED";
 
-      case "CLOSED":
-        return d.status === "CLOSED";
 
       default:
         return true;
@@ -271,10 +267,13 @@ export default function SellerDashboardPage() {
           delivery_type,
           seller_marked_paid,
           driver_confirmed_payment,
-          closed_at
+          closed_at,
+          seller_hidden
         `
         )
         .eq("seller_id", sellerId)
+        // 🔹 Нуусан (устгасан) хүргэлтүүдийг дахин бүү харуул
+        .eq("seller_hidden", false)
         .order("created_at", { ascending: false });
 
       if (error) {
@@ -297,11 +296,41 @@ export default function SellerDashboardPage() {
         seller_marked_paid: !!d.seller_marked_paid,
         driver_confirmed_payment: !!d.driver_confirmed_payment,
         closed_at: d.closed_at,
+        seller_hidden: !!d.seller_hidden,
       }));
 
       setDeliveries(rows);
     } finally {
       setLoadingList(false);
+    }
+  }
+
+  /* ---------- CLOSED ХҮРГЭЛТ НУУХ (УСТГАХ) ---------- */
+
+  async function handleHideClosed(deliveryId: string) {
+    if (!user) return;
+
+    try {
+      setError(null);
+      setMessage(null);
+
+      const { error } = await supabase
+        .from("deliveries")
+        .update({ seller_hidden: true })
+        .eq("id", deliveryId)
+        .eq("seller_id", user.id);
+
+      if (error) {
+        console.error(error);
+        setError("Хүргэлтийг нуухад алдаа гарлаа.");
+        return;
+      }
+
+      setMessage("Хаагдсан хүргэлтийг жагсаалтаас нууж хадгаллаа.");
+      await fetchDeliveries(user.id);
+    } catch (e) {
+      console.error(e);
+      setError("Хүргэлтийг нуухад алдаа гарлаа.");
     }
   }
 
@@ -322,90 +351,115 @@ export default function SellerDashboardPage() {
           const t = typeLabel(d.delivery_type);
           const sb = statusBadge(d.status);
 
-          let paymentText = "";
-          if (d.status === "DELIVERED") {
-            if (d.seller_marked_paid) {
-              paymentText = "Та төлбөрөө тэмдэглэсэн, жолооч баталгаажуулахыг хүлээж байна.";
-            } else {
-              paymentText = "Хүргэлт дууссан, төлбөрөө тэмдэглээгүй байна.";
-            }
-          } else if (d.status === "PAID") {
-            paymentText = "Төлбөр төлсөн (PAID), жолооч баталгаажуулаагүй байна.";
-          } else if (d.status === "CLOSED") {
-            paymentText = "Төлбөрийн тооцоо бүрэн дууссан (хаагдсан).";
-          }
+                let paymentText = "";
+      if (d.status === "DELIVERED") {
+        if (d.seller_marked_paid && d.driver_confirmed_payment) {
+          paymentText =
+            "Төлбөр төлөгдсөн, жолооч баталгаажуулсан. Хаагдахад бэлэн.";
+        } else if (d.seller_marked_paid) {
+          paymentText =
+            "Та төлбөрөө тэмдэглэсэн, жолооч баталгаажуулахыг хүлээж байна.";
+        } else if (d.driver_confirmed_payment) {
+          paymentText =
+            "Жолооч төлбөрөө авсан гэж илгээсэн, та төлбөрөө тэмдэглээгүй байна.";
+        } else {
+          paymentText =
+            "Хүргэлт дууссан, төлбөрийн мэдээлэл хараахан бүртгээгүй байна.";
+        }
+      } else if (d.status === "CLOSED") {
+        paymentText = "Төлбөрийн тооцоо бүрэн дууссан (хаагдсан).";
+      }
+
+
+          const showHideButton = activeTab === "CLOSED" && d.status === "CLOSED";
 
           return (
-            <button
-              key={d.id}
-              type="button"
-              onClick={() =>
-                router.push(`/seller/delivery/${d.id}?tab=${activeTab}`)
-              }
-              className="w-full text-left rounded-2xl border border-slate-200 bg-white px-4 py-3 hover:border-emerald-300 hover:shadow-sm transition"
-            >
-              <div className="flex items-start justify-between gap-3">
-                <div className="flex-1 space-y-1">
-                  {/* Дээд мөр — ID + статус */}
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs font-semibold text-slate-900">
-                      #{d.id.slice(0, 6)}
-                    </span>
-                    <span
-                      className={
-                        "inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium " +
-                        sb.className
-                      }
-                    >
-                      {sb.text}
-                    </span>
-                  </div>
-
-                  {/* Төрөл, үнэ */}
-                  <div className="flex items-center gap-2 text-[11px] text-slate-600">
-                    <span>{t.icon}</span>
-                    <span className="font-medium">{t.label}</span>
-                    <span className="text-slate-400">•</span>
-                    <span>{formatPrice(d.price_mnt)}</span>
-                  </div>
-
-                  {/* Хаягууд */}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px] text-slate-600 mt-1">
-                    <div>
-                      <div className="text-[10px] font-semibold text-slate-500">
-                        АВАХ
-                      </div>
-                      <p>{shorten(d.from_address, 60)}</p>
+            <div key={d.id} className="relative">
+              {/* Картыг дарахад дэлгэрэнгүй рүү орно */}
+              <button
+                type="button"
+                onClick={() =>
+                  router.push(`/seller/delivery/${d.id}?tab=${activeTab}`)
+                }
+                className="w-full text-left rounded-2xl border border-slate-200 bg-white px-4 py-3 hover:border-emerald-300 hover:shadow-sm transition"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex-1 space-y-1">
+                    {/* Дээд мөр — ID + статус */}
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-semibold text-slate-900">
+                        #{d.id.slice(0, 6)}
+                      </span>
+                      <span
+                        className={
+                          "inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium " +
+                          sb.className
+                        }
+                      >
+                        {sb.text}
+                      </span>
                     </div>
-                    <div>
-                      <div className="text-[10px] font-semibold text-slate-500">
-                        ХҮРГЭХ
-                      </div>
-                      <p>{shorten(d.to_address, 60)}</p>
+
+                    {/* Төрөл, үнэ */}
+                    <div className="flex items-center gap-2 text-[11px] text-slate-600">
+                      <span>{t.icon}</span>
+                      <span className="font-medium">{t.label}</span>
+                      <span className="text-slate-400">•</span>
+                      <span>{formatPrice(d.price_mnt)}</span>
                     </div>
+
+                    {/* Хаягууд */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px] text-slate-600 mt-1">
+                      <div>
+                        <div className="text-[10px] font-semibold text-slate-500">
+                          АВАХ
+                        </div>
+                        <p>{shorten(d.from_address, 60)}</p>
+                      </div>
+                      <div>
+                        <div className="text-[10px] font-semibold text-slate-500">
+                          ХҮРГЭХ
+                        </div>
+                        <p>{shorten(d.to_address, 60)}</p>
+                      </div>
+                    </div>
+
+                    {/* Товч тайлбар */}
+                    {d.note && (
+                      <p className="mt-1 text-[11px] text-slate-500">
+                        {shorten(d.note, 80)}
+                      </p>
+                    )}
+
+                    {/* Огноо */}
+                    <p className="mt-1 text-[10px] text-slate-400">
+                      Үүсгэсэн: {formatDateTime(d.created_at)}
+                    </p>
+
+                    {/* Төлбөрийн тайлбар */}
+                    {paymentText && (
+                      <p className="mt-1 text-[10px] text-emerald-700">
+                        {paymentText}
+                      </p>
+                    )}
                   </div>
-
-                  {/* Товч тайлбар */}
-                  {d.note && (
-                    <p className="mt-1 text-[11px] text-slate-500">
-                      {shorten(d.note, 80)}
-                    </p>
-                  )}
-
-                  {/* Огноо */}
-                  <p className="mt-1 text-[10px] text-slate-400">
-                    Үүсгэсэн: {formatDateTime(d.created_at)}
-                  </p>
-
-                  {/* Төлбөрийн тайлбар */}
-                  {paymentText && (
-                    <p className="mt-1 text-[10px] text-emerald-700">
-                      {paymentText}
-                    </p>
-                  )}
                 </div>
-              </div>
-            </button>
+              </button>
+
+              {/* 🔹 CLOSED таб дээр л харагдах “Устгах / Нуух” товч */}
+              {showHideButton && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation(); // карт руу орохыг болиулна
+                    void handleHideClosed(d.id);
+                  }}
+                  className="absolute right-3 top-3 text-[10px] px-2 py-1 rounded-full border border-slate-200 bg-slate-50 text-slate-600 hover:bg-rose-50 hover:border-rose-200 hover:text-rose-700"
+                >
+                  Устгах
+                </button>
+              )}
+            </div>
           );
         })}
       </div>

@@ -5,10 +5,7 @@
 import { useEffect, useState } from "react";
 import { useRouter, useParams, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
-import {
-  DeliveryStatus,
-  canOpenDisputeForDriver as baseCanOpenDisputeForDriver,
-} from "@/lib/deliveryLogic";
+import { DeliveryStatus } from "@/lib/deliveryLogic";
 
 type Role = "seller" | "driver";
 
@@ -36,10 +33,15 @@ type DeliveryDetail = {
   driver_confirmed_payment: boolean;
   closed_at: string | null;
 
+  // 🔹 Маргааны талбарууд
+  dispute_reason?: string | null;
+  dispute_opened_at?: string | null;
+
   // seller info
   seller_name?: string | null;
   seller_phone?: string | null;
 };
+
 
 type DriverBidRow = {
   id: string;
@@ -90,11 +92,6 @@ function statusBadge(status: DeliveryStatus) {
       return {
         text: "Хүргэсэн",
         className: "bg-slate-900 text-white border-slate-900",
-      };
-    case "PAID":
-      return {
-        text: "Төлбөр баталгаажсан",
-        className: "bg-emerald-900 text-emerald-50 border-emerald-900",
       };
     case "CLOSED":
       return {
@@ -228,7 +225,7 @@ export default function DriverDeliveryDetailPage() {
       setMessage(null);
 
       // 5.1 Хүргэлтийн дэлгэрэнгүй
-      const { data, error } = await supabase
+            const { data, error } = await supabase
         .from("deliveries")
         .select(
           `
@@ -245,6 +242,8 @@ export default function DriverDeliveryDetailPage() {
           seller_marked_paid,
           driver_confirmed_payment,
           closed_at,
+          dispute_reason,
+          dispute_opened_at,
           seller:seller_id (
             name,
             phone
@@ -254,6 +253,7 @@ export default function DriverDeliveryDetailPage() {
         .eq("id", id)
         .maybeSingle();
 
+
       if (error) {
         console.error(error);
         setError("Хүргэлтийн мэдээлэл татахад алдаа гарлаа.");
@@ -261,7 +261,7 @@ export default function DriverDeliveryDetailPage() {
       } else if (!data) {
         setError("Ийм хүргэлт олдсонгүй.");
         setDelivery(null);
-      } else {
+        } else {
         const d = data as any;
         const detail: DeliveryDetail = {
           id: d.id,
@@ -277,11 +277,14 @@ export default function DriverDeliveryDetailPage() {
           seller_marked_paid: !!d.seller_marked_paid,
           driver_confirmed_payment: !!d.driver_confirmed_payment,
           closed_at: d.closed_at,
+          dispute_reason: d.dispute_reason ?? null,
+          dispute_opened_at: d.dispute_opened_at ?? null,
           seller_name: d.seller?.name ?? null,
           seller_phone: d.seller?.phone ?? null,
         };
         setDelivery(detail);
       }
+
 
       setLoadingDetail(false);
 
@@ -420,7 +423,7 @@ export default function DriverDeliveryDetailPage() {
     await updateStatus("DELIVERED");
   }
 
-  // =================== 9. Төлбөр авснаа батлах (driver_confirmed_payment) ===================
+  // =================== 9. Төлбөр авснаа батлах ===================
 
   async function handleConfirmPayment() {
     if (!delivery || !user) return;
@@ -485,20 +488,32 @@ export default function DriverDeliveryDetailPage() {
 
   // =================== 10. Маргаан нээх (driver тал) ===================
 
+  // Энэ хүргэлт үнэхээр энэ жолоочид оноосон эсэх
   const isThisDriverAssigned =
     !!delivery &&
     !!user &&
     delivery.chosen_driver_id === user.id;
 
+  // Маргаан нээх боломжтой нөхцөл:
+  // - Хүргэлт энэ жолоочид оноосон
+  // - Статус нь ON_ROUTE эсвэл DELIVERED
+  // - Одоогоор DISPUTE биш
   const canOpenDispute =
     !!delivery &&
     isThisDriverAssigned &&
-    baseCanOpenDisputeForDriver(delivery.status);
+    delivery.status !== "DISPUTE" &&
+    (delivery.status === "ON_ROUTE" || delivery.status === "DELIVERED");
 
   async function handleOpenDisputeConfirm() {
     if (!delivery || !user) return;
+
     if (!isThisDriverAssigned) {
       setError("Зөвхөн өөрт оноосон хүргэлт дээр маргаан нээнэ.");
+      return;
+    }
+
+    if (!canOpenDispute) {
+      setError("Энэ хүргэлт дээр маргаан нээх боломжгүй төлөв байна.");
       return;
     }
 
@@ -532,6 +547,7 @@ export default function DriverDeliveryDetailPage() {
       setDelivery({
         ...delivery,
         status: "DISPUTE",
+        dispute_reason: reason,
       });
 
       setShowDisputeModal(false);
@@ -761,7 +777,7 @@ export default function DriverDeliveryDetailPage() {
           {(isAssigned || isOnRoute || isDelivered) && (
             <div className="border-b border-slate-100 pb-3 mb-2 space-y-2">
               {isAssigned && (
-                <div className="flex flex-wrap items-center justify_between gap-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
                   <p className="text-xs text-slate-600">
                     Энэ хүргэлт танд оноосон байна. Барааг авсан үед{" "}
                     <span className="font-medium">“Барааг авлаа”</span> гэж
@@ -783,10 +799,10 @@ export default function DriverDeliveryDetailPage() {
                     Та барааг авсан, замд явж байна. Хүргэлт амжилттай дууссан
                     үед{" "}
                     <span className="font-medium">“Хүргэлт хийсэн”</span> гэж
-                    тэмдэглэнэ.
-                    Хэрвээ асуудал гарвал (хаяг олдохгүй, төлбөр өгөхгүй гэх
-                    мэт) дараа нь{" "}
-                    <span className="font-medium">маргаан нээх</span> боломжтой.
+                    тэмдэглэнэ. Хэрвээ асуудал гарвал (хаяг олдохгүй, төлбөр
+                    өгөхгүй гэх мэт) дараа нь{" "}
+                    <span className="font-medium">маргаан нээх</span>{" "}
+                    боломжтой.
                   </p>
                   <button
                     onClick={handleMarkDelivered}
@@ -868,7 +884,7 @@ export default function DriverDeliveryDetailPage() {
             </div>
           )}
 
-          {/* 3.4 – Маргаан үүсгэх */}
+          {/* 3.4 – Маргаан үүсгэх (жолооч тал) */}
           {canOpenDispute && (
             <div className="space-y-2">
               <p className="text-xs text-slate-600">
@@ -876,9 +892,10 @@ export default function DriverDeliveryDetailPage() {
                 <span className="font-semibold text-rose-700">
                   ноцтой зөрчил
                 </span>{" "}
-                гарсан (худалдагч төлбөр өгөхөөс татгалзсан, тогтсон
-                тохиролцоог зөрчсөн гэх мэт) бол маргаан нээж болно. Болсон
-                үйлдлийг тодорхой бичнэ үү.
+                гарсан (худалдагч төлбөр өгөхөөс татгалзсан, тохирсон
+                нөхцөлийг ноцтой зөрчсөн гэх мэт) үед л{" "}
+                <span className="font-semibold">маргаан нээнэ</span>. Болсон
+                үйл явдлыг товч, тодорхой бичиж илгээнэ үү.
               </p>
               <button
                 onClick={() => setShowDisputeModal(true)}
