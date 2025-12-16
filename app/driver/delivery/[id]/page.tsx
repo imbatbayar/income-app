@@ -1,21 +1,14 @@
 "use client";
 
 /* ===========================
- * app/driver/delivery/[id]/page.tsx (FINAL v7.0)
+ * app/driver/delivery/[id]/page.tsx (FINAL v7.2)
  *
- * ✅ NEW RULE:
- * - ASSIGNED -> ON_ROUTE : Seller тал "Жолооч барааг авч явлаа" дарж шилжүүлнэ
- * - Driver тал ASSIGNED дээр ямар ч "Замд гарсан" товч байхгүй
- *
- * ✅ PRIVACY:
- * - Buyer private info (delivery_private.to_detail, buyer_phone)
- *   зөвхөн:
- *   1) chosen_driver_id === me
- *   2) status ∈ ON_ROUTE / DELIVERED / PAID / DISPUTE / CLOSED
- *
- * ✅ FIX:
- * - Update бүр дээр DB verify (update + select) → 2 удаа дарах буурна
- * - verify ok бол local state + redirect + refresh
+ * ✅ FIXES:
+ * 1) React hooks order crash (privateText useMemo moved ABOVE early returns)
+ * 2) Alerts auto-dismiss after 8s (msg/error)
+ * 3) Cancel/Decline:
+ *    - OPEN: cancel bid (delete driver_bids)
+ *    - ASSIGNED + chosen driver: decline => deliveries.status=OPEN, chosen_driver_id=null (and delete own bid if any)
  * =========================== */
 
 import { useEffect, useMemo, useState } from "react";
@@ -195,6 +188,19 @@ export default function DriverDeliveryDetailPage() {
   const [disputeLoading, setDisputeLoading] = useState(false);
   const [resolveLoading, setResolveLoading] = useState(false);
 
+  // ✅ alerts auto-dismiss (8s)
+  useEffect(() => {
+    if (!error) return;
+    const t = setTimeout(() => setError(null), 8000);
+    return () => clearTimeout(t);
+  }, [error]);
+
+  useEffect(() => {
+    if (!msg) return;
+    const t = setTimeout(() => setMsg(null), 8000);
+    return () => clearTimeout(t);
+  }, [msg]);
+
   // ---------------- auth ----------------
   useEffect(() => {
     try {
@@ -352,6 +358,16 @@ export default function DriverDeliveryDetailPage() {
     );
   }, [delivery, user, isChosenDriver]);
 
+  // ✅ Hook order fix: privateText isMemo MUST be above any early returns
+  const privateText = useMemo(() => {
+    if (!priv) return "";
+    const lines = [
+      priv.buyer_phone ? `Утас: ${priv.buyer_phone}` : null,
+      priv.to_detail ? `Нарийн хаяг: ${priv.to_detail}` : null,
+    ].filter(Boolean) as string[];
+    return lines.join("\n");
+  }, [priv]);
+
   // ✅ fetch private only when allowed
   async function maybeLoadPrivate(d: DeliveryDetail) {
     if (!user) return;
@@ -421,28 +437,68 @@ export default function DriverDeliveryDetailPage() {
     }
   }
 
+  // ✅ OPEN: cancel bid
+  // ✅ ASSIGNED + chosen driver: decline => OPEN + chosen_driver_id=null
   async function cancelBid() {
     if (!delivery || !user) return;
-    if (!myBid) return;
     if (cancelBidLoading) return;
-
-    if (delivery.status !== "OPEN") return setError("Энэ хүргэлт дээр хүсэлт цуцлах боломжгүй.");
 
     setCancelBidLoading(true);
     setError(null);
     setMsg(null);
 
     try {
-      const { error } = await supabase.from("driver_bids").delete().eq("id", myBid.id).eq("driver_id", user.id);
+      // 1) OPEN үед: bid л устгана
+      if (delivery.status === "OPEN") {
+        if (!myBid) return setError("Та энэ хүргэлтэд хүсэлт гаргаагүй байна.");
 
-      if (error) {
-        console.error(error);
-        setError(pickErr(error, "Хүсэлт цуцлахад алдаа гарлаа."));
+        const { error } = await supabase.from("driver_bids").delete().eq("id", myBid.id).eq("driver_id", user.id);
+
+        if (error) {
+          console.error(error);
+          setError(pickErr(error, "Хүсэлт цуцлахад алдаа гарлаа."));
+          return;
+        }
+
+        setMyBid(null);
+        setMsg("Хүсэлт цуцлагдлаа.");
         return;
       }
 
-      setMyBid(null);
-      setMsg("Хүсэлт цуцлагдлаа.");
+      // 2) ASSIGNED дээр: сонгогдсон жолооч татгалзвал буцаад OPEN болгоно
+      if (delivery.status === "ASSIGNED" && delivery.chosen_driver_id === user.id) {
+        // 2.1 өөрийн bid байвал устгана (байхгүй байж болно)
+        if (myBid) {
+          await supabase.from("driver_bids").delete().eq("id", myBid.id).eq("driver_id", user.id);
+          setMyBid(null);
+        }
+
+        // 2.2 deliveries unassign
+        const { data, error } = await supabase
+          .from("deliveries")
+          .update({ status: "OPEN", chosen_driver_id: null })
+          .eq("id", delivery.id)
+          .eq("chosen_driver_id", user.id)
+          .select("id,status,chosen_driver_id")
+          .maybeSingle();
+
+        if (error || !data) {
+          console.error(error);
+          setError(pickErr(error, "Татгалзахад алдаа гарлаа."));
+          return;
+        }
+
+        // local state
+        setDelivery((d) => (d ? { ...d, status: "OPEN", chosen_driver_id: null } : d));
+        setPriv(null);
+
+        setMsg("Татгалзлаа. Хүргэлт дахин нээлттэй боллоо.");
+        router.push("/driver?tab=OPEN");
+        router.refresh();
+        return;
+      }
+
+      setError("Энэ төлөв дээр цуцлах боломжгүй.");
     } finally {
       setCancelBidLoading(false);
     }
@@ -585,7 +641,6 @@ export default function DriverDeliveryDetailPage() {
         .from("deliveries")
         .update({ status: "DISPUTE", dispute_reason: reason, dispute_opened_at: openedAt })
         .eq("id", delivery.id)
-        // ✅ guard: зөвхөн ON_ROUTE / DELIVERED / PAID
         .in("status", ["ON_ROUTE", "DELIVERED", "PAID"] as any)
         // ✅ VERIFY
         .select("id,status,dispute_reason,dispute_opened_at,chosen_driver_id")
@@ -698,15 +753,6 @@ export default function DriverDeliveryDetailPage() {
   const t = typeLabel(delivery?.delivery_type ?? null);
   const b = delivery ? badge(delivery.status) : null;
 
-  const privateText = useMemo(() => {
-    if (!priv) return "";
-    const lines = [
-      priv.buyer_phone ? `Утас: ${priv.buyer_phone}` : null,
-      priv.to_detail ? `Нарийн хаяг: ${priv.to_detail}` : null,
-    ].filter(Boolean);
-    return lines.join("\n");
-  }, [priv]);
-
   return (
     <div className="min-h-screen bg-slate-50">
       <main className="max-w-3xl mx-auto px-4 py-6 space-y-4">
@@ -728,8 +774,14 @@ export default function DriverDeliveryDetailPage() {
         </div>
 
         {/* alerts */}
-        {error && <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
-        {msg && <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">{msg}</div>}
+        {error && (
+          <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>
+        )}
+        {msg && (
+          <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+            {msg}
+          </div>
+        )}
 
         {!delivery ? (
           <div className="rounded-2xl border border-slate-200 bg-white px-4 py-6">
@@ -867,11 +919,24 @@ export default function DriverDeliveryDetailPage() {
                   </>
                 )}
 
-                {/* ❌ ASSIGNED дээр "Замд гарсан" байхгүй болсон (Seller дарна) */}
+                {/* ✅ ASSIGNED дээр chosen driver татгалзаж болно */}
                 {delivery.status === "ASSIGNED" && (
-                  <div className="text-xs text-slate-600 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
-                    Худалдагч “Жолооч барааг авч явлаа” дарсны дараа энэ хүргэлт “Замд” таб руу орно.
-                  </div>
+                  <>
+                    <div className="text-xs text-slate-600 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                      Худалдагч “Жолооч барааг авч явлаа” дарсны дараа энэ хүргэлт “Замд” таб руу орно.
+                    </div>
+
+                    {isChosenDriver && (
+                      <button
+                        type="button"
+                        onClick={() => void cancelBid()}
+                        disabled={cancelBidLoading}
+                        className="text-xs px-4 py-2 rounded-xl border border-rose-300 bg-rose-50 text-rose-700 hover:bg-rose-100 disabled:opacity-60"
+                      >
+                        {cancelBidLoading ? "Татгалзаж байна…" : "Татгалзах"}
+                      </button>
+                    )}
+                  </>
                 )}
 
                 {delivery.status === "ON_ROUTE" && (

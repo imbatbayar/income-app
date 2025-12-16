@@ -1,9 +1,13 @@
 "use client";
 
 /* ===========================
- * app/seller/delivery/[id]/page.tsx (FINAL v6.2)
+ * app/seller/delivery/[id]/page.tsx (FINAL v6.3)
  *
- * ✅ Added/Kept:
+ * ✅ Added:
+ * - Driver avatar_url (users.avatar_url) in bids list
+ * - Alerts auto-dismiss after 8 seconds (msg/error)
+ *
+ * ✅ Kept:
  * - Driver bank info (driver_profiles) + Copy
  * - Visible only when status in: DELIVERED / PAID / DISPUTE / CLOSED
  *
@@ -64,6 +68,7 @@ type DriverPublic = {
   id: string;
   name: string | null;
   phone: string | null;
+  avatar_url?: string | null; // ✅ NEW
 };
 
 type BidRow = {
@@ -158,6 +163,11 @@ async function copyText(text: string) {
   }
 }
 
+function firstLetter(name?: string | null) {
+  const n = String(name || "").trim();
+  return n ? n.slice(0, 1).toUpperCase() : "D";
+}
+
 // ---------------- page ----------------
 
 export default function SellerDeliveryDetailPage() {
@@ -189,6 +199,19 @@ export default function SellerDeliveryDetailPage() {
   const [disputeReason, setDisputeReason] = useState("");
   const [disputeLoading, setDisputeLoading] = useState(false);
   const [resolveLoading, setResolveLoading] = useState(false);
+
+  // ✅ Alerts auto-dismiss (8s)
+  useEffect(() => {
+    if (!error) return;
+    const t = setTimeout(() => setError(null), 8000);
+    return () => clearTimeout(t);
+  }, [error]);
+
+  useEffect(() => {
+    if (!msg) return;
+    const t = setTimeout(() => setMsg(null), 8000);
+    return () => clearTimeout(t);
+  }, [msg]);
 
   // ---------------- auth ----------------
   useEffect(() => {
@@ -281,6 +304,7 @@ export default function SellerDeliveryDetailPage() {
 
       setDelivery(d);
 
+      // ✅ include driver.avatar_url in join
       const { data: bidRows, error: e2 } = await supabase
         .from("driver_bids")
         .select(
@@ -291,7 +315,8 @@ export default function SellerDeliveryDetailPage() {
           driver:driver_id (
             id,
             name,
-            phone
+            phone,
+            avatar_url
           )
         `
         )
@@ -461,7 +486,6 @@ export default function SellerDeliveryDetailPage() {
         })
         .eq("id", delivery.id)
         .eq("seller_id", user.id)
-        // ✅ stale/double-click guard
         .eq("status", delivery.status)
         .neq("status", "CLOSED");
 
@@ -713,38 +737,53 @@ export default function SellerDeliveryDetailPage() {
                     <div className="text-xs text-slate-500">Одоогоор санал ирээгүй.</div>
                   ) : (
                     <div className="space-y-2">
-                      {bids.map((b) => (
-                        <div
-                          key={b.id}
-                          className="rounded-xl border border-slate-200 bg-slate-50 p-3 flex items-center justify-between gap-2"
-                        >
-                          <div className="min-w-0">
-                            <div className="text-sm font-semibold text-slate-900 truncate">{b.driver?.name || "Нэргүй жолооч"}</div>
-                            <div className="text-[11px] text-slate-600">
-                              {b.driver?.phone ? `📞 ${b.driver.phone}` : "📞 —"} · Илгээсэн: {fmtDT(b.created_at)}
+                      {bids.map((b) => {
+                        const av = b.driver?.avatar_url || "";
+                        const nm = b.driver?.name || "Нэргүй жолооч";
+                        return (
+                          <div
+                            key={b.id}
+                            className="rounded-xl border border-slate-200 bg-slate-50 p-3 flex items-center justify-between gap-2"
+                          >
+                            <div className="flex items-center gap-3 min-w-0">
+                              <div className="h-11 w-11 rounded-2xl border border-slate-200 bg-white overflow-hidden flex items-center justify-center shrink-0">
+                                {av ? (
+                                  // eslint-disable-next-line @next/next/no-img-element
+                                  <img src={av} alt="avatar" className="h-full w-full object-cover" />
+                                ) : (
+                                  <div className="text-sm font-semibold text-slate-700">{firstLetter(nm)}</div>
+                                )}
+                              </div>
+
+                              <div className="min-w-0">
+                                <div className="text-sm font-semibold text-slate-900 truncate">{nm}</div>
+                                <div className="text-[11px] text-slate-600">
+                                  {b.driver?.phone ? `📞 ${b.driver.phone}` : "📞 —"} · Илгээсэн: {fmtDT(b.created_at)}
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-2">
+                              {b.driver?.phone && (
+                                <a
+                                  href={`tel:${b.driver.phone}`}
+                                  className="text-[11px] px-3 py-1.5 rounded-full border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                                >
+                                  Залгах
+                                </a>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => void chooseDriver(b.driver_id)}
+                                disabled={chooseLoading === b.driver_id}
+                                className="text-[11px] px-4 py-2 rounded-full bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-60"
+                              >
+                                {chooseLoading === b.driver_id ? "Сонгож байна…" : "Сонгох"}
+                              </button>
                             </div>
                           </div>
-
-                          <div className="flex items-center gap-2">
-                            {b.driver?.phone && (
-                              <a
-                                href={`tel:${b.driver.phone}`}
-                                className="text-[11px] px-3 py-1.5 rounded-full border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
-                              >
-                                Залгах
-                              </a>
-                            )}
-                            <button
-                              type="button"
-                              onClick={() => void chooseDriver(b.driver_id)}
-                              disabled={chooseLoading === b.driver_id}
-                              className="text-[11px] px-4 py-2 rounded-full bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-60"
-                            >
-                              {chooseLoading === b.driver_id ? "Сонгож байна…" : "Сонгох"}
-                            </button>
-                          </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   )}
                 </div>
