@@ -1,32 +1,31 @@
 "use client";
 
 /* ===========================
- * app/driver/delivery/[id]/page.tsx (FINAL)
+ * app/driver/delivery/[id]/page.tsx (FINAL v6.1)
  *
- * ✅ DRIVER detail:
+ * ✅ Fix:
+ * - Map import → alias (path асуудал дахиж үүсгэхгүй)
+ * - Dispute submit → давхар loading lock-гүй (2 дарах bug багасна)
+ *
+ * ✅ DRIVER detail — BABA Rules:
  * - OPEN: "Авах хүсэлт" / "Хүсэлт цуцлах"
  * - ASSIGNED: зөвхөн сонгогдсон жолооч "Замд гарсан" -> ON_ROUTE
  * - ON_ROUTE: зөвхөн сонгогдсон жолооч "Хүргэлсэн" -> DELIVERED
- * - ON_ROUTE / DELIVERED: "Маргаан" товч байна
+ * - DELIVERED: жолооч төлбөр батлахгүй (seller-ийг хүлээнэ → PAID)
+ * - PAID: зөвхөн сонгогдсон жолооч "Төлбөр хүлээн авсан" -> CLOSED (one-way, NO rollback)
+ * - ON_ROUTE / DELIVERED / PAID: "Маргаан" товч байна
  * - DISPUTE: "Шийдэгдсэн" (DISPUTE -> CLOSED)
- * - DELIVERED: "Төлбөр авснаа батлах" (driver_confirmed_payment toggle)
- *   -> хэрэв seller_marked_paid=true бол CLOSED (deliveryLogic.shouldCloseDelivery)
- * + Map: pickup(ногоон) -> dropoff(улаан) нум зураастай preview (координат байвал)
- *
- * NOTE: Энэ файл FINAL. Дахиж давтаж засахгүй.
+ * - ❌ NO: "Төлбөрийн баталгаа цуцлах", toggle payment
+ * + Map: координат байвал route preview
  * =========================== */
 
 import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
-import {
-  DeliveryStatus,
-  getDriverTabForStatus,
-  shouldCloseDelivery,
-} from "@/lib/deliveryLogic";
+import { DeliveryStatus, getDriverTabForStatus } from "@/lib/deliveryLogic";
 
-// ✅ relative import (alias асуудалгүй)
-import DeliveryRouteMap from "../../../components/Map/DeliveryRouteMap";
+// ✅ Alias import (тогтвортой)
+import DeliveryRouteMap from "@/app/components/Map/DeliveryRouteMap";
 
 type Role = "seller" | "driver";
 
@@ -46,7 +45,6 @@ type DeliveryDetail = {
   to_address: string | null;
   note: string | null;
 
-  // ✅ Map coords
   pickup_lat: number | null;
   pickup_lng: number | null;
   dropoff_lat: number | null;
@@ -117,6 +115,8 @@ function badge(status: DeliveryStatus) {
       return { text: "Замд", cls: "bg-indigo-50 text-indigo-700 border-indigo-100" };
     case "DELIVERED":
       return { text: "Хүргэсэн", cls: "bg-amber-50 text-amber-700 border-amber-100" };
+    case "PAID":
+      return { text: "Төлсөн", cls: "bg-emerald-50 text-emerald-800 border-emerald-100" };
     case "DISPUTE":
       return { text: "Маргаан", cls: "bg-rose-50 text-rose-700 border-rose-100" };
     case "CLOSED":
@@ -294,11 +294,10 @@ export default function DriverDeliveryDetailPage() {
     return delivery.status === "ON_ROUTE" && isChosenDriver;
   }, [delivery, isChosenDriver]);
 
-  // ✅ Маргаан — зөвхөн ON_ROUTE / DELIVERED
   const canOpenDispute = useMemo(() => {
     if (!delivery) return false;
-    if (delivery.status === "DISPUTE") return false;
-    return delivery.status === "ON_ROUTE" || delivery.status === "DELIVERED";
+    if (delivery.status === "DISPUTE" || delivery.status === "CLOSED" || delivery.status === "CANCELLED") return false;
+    return delivery.status === "ON_ROUTE" || delivery.status === "DELIVERED" || delivery.status === "PAID";
   }, [delivery]);
 
   const hasMap =
@@ -312,14 +311,9 @@ export default function DriverDeliveryDetailPage() {
 
   async function placeBid() {
     if (!delivery || !user) return;
-    if (!canBid) {
-      setError("Зөвхөн Нээлттэй үед хүсэлт илгээнэ.");
-      return;
-    }
-    if (myBid) {
-      setError("Та аль хэдийн хүсэлт илгээсэн байна.");
-      return;
-    }
+    if (!canBid) return setError("Зөвхөн Нээлттэй үед хүсэлт илгээнэ.");
+    if (myBid) return setError("Та аль хэдийн хүсэлт илгээсэн байна.");
+    if (bidLoading) return;
 
     setBidLoading(true);
     setError(null);
@@ -348,6 +342,9 @@ export default function DriverDeliveryDetailPage() {
   async function cancelBid() {
     if (!delivery || !user) return;
     if (!myBid) return;
+    if (cancelBidLoading) return;
+
+    if (delivery.status !== "OPEN") return setError("Энэ хүргэлт дээр хүсэлт цуцлах боломжгүй.");
 
     setCancelBidLoading(true);
     setError(null);
@@ -371,10 +368,8 @@ export default function DriverDeliveryDetailPage() {
 
   async function markOnRoute() {
     if (!delivery || !user) return;
-    if (!canMarkOnRoute) {
-      setError("Энэ хүргэлт танд оноогдоогүй эсвэл төлөв буруу байна.");
-      return;
-    }
+    if (!canMarkOnRoute) return setError("Энэ хүргэлт танд оноогдоогүй эсвэл төлөв буруу байна.");
+    if (markOnRouteLoading) return;
 
     setMarkOnRouteLoading(true);
     setError(null);
@@ -404,10 +399,8 @@ export default function DriverDeliveryDetailPage() {
 
   async function markDelivered() {
     if (!delivery || !user) return;
-    if (!canMarkDelivered) {
-      setError("Энэ хүргэлт танд оноогдоогүй эсвэл төлөв буруу байна.");
-      return;
-    }
+    if (!canMarkDelivered) return setError("Энэ хүргэлт танд оноогдоогүй эсвэл төлөв буруу байна.");
+    if (markDeliveredLoading) return;
 
     setMarkDeliveredLoading(true);
     setError(null);
@@ -435,43 +428,28 @@ export default function DriverDeliveryDetailPage() {
     }
   }
 
-  async function toggleDriverConfirmedPayment() {
+  async function confirmPaymentReceived() {
     if (!delivery || !user) return;
+    if (confirmPayLoading) return;
 
-    if (!(delivery.status === "DELIVERED" || delivery.status === "CLOSED")) {
-      setError("Зөвхөн 'Хүргэсэн' үед төлбөр батална.");
-      return;
-    }
-    if (!isChosenDriver) {
-      setError("Энэ хүргэлт танд оноогдоогүй байна.");
-      return;
-    }
+    if (delivery.status !== "PAID") return setError("Зөвхөн 'Төлсөн' үед төлбөр хүлээн авснаа батална.");
+    if (!isChosenDriver) return setError("Энэ хүргэлт танд оноогдоогүй байна.");
+    if (delivery.driver_confirmed_payment) return setError("Төлбөр аль хэдийн баталгаажсан байна.");
 
     setConfirmPayLoading(true);
     setError(null);
     setMsg(null);
 
     try {
-      const next = !delivery.driver_confirmed_payment;
-
-      const willClose = shouldCloseDelivery({
-        status: delivery.status,
-        seller_marked_paid: delivery.seller_marked_paid,
-        driver_confirmed_payment: next,
-      });
-
-      const nextStatus: DeliveryStatus = willClose ? "CLOSED" : delivery.status;
-      const closedAt = willClose ? new Date().toISOString() : delivery.closed_at;
+      const closedAt = new Date().toISOString();
 
       const { error } = await supabase
         .from("deliveries")
-        .update({
-          driver_confirmed_payment: next,
-          status: nextStatus,
-          closed_at: closedAt,
-        })
+        .update({ driver_confirmed_payment: true, status: "CLOSED", closed_at: closedAt })
         .eq("id", delivery.id)
-        .eq("chosen_driver_id", user.id);
+        .eq("chosen_driver_id", user.id)
+        .eq("status", "PAID")
+        .eq("driver_confirmed_payment", false);
 
       if (error) {
         console.error(error);
@@ -479,31 +457,21 @@ export default function DriverDeliveryDetailPage() {
         return;
       }
 
-      setDelivery({
-        ...delivery,
-        driver_confirmed_payment: next,
-        status: nextStatus,
-        closed_at: closedAt,
-      });
-
-      setMsg(next ? "Төлбөр авснаа баталлаа." : "Төлбөрийн баталгааг цуцаллаа.");
+      setDelivery({ ...delivery, driver_confirmed_payment: true, status: "CLOSED", closed_at: closedAt });
+      setMsg("Төлбөр хүлээн авснаа баталлаа.");
+      setTimeout(() => router.push("/driver?tab=CLOSED"), 450);
     } finally {
       setConfirmPayLoading(false);
     }
   }
 
   async function openDispute() {
-    if (!delivery || !user) return;
+    if (!delivery) return;
 
     const reason = disputeReason.trim();
-    if (!reason) {
-      setError("Маргааны шалтгаанаа бичнэ үү.");
-      return;
-    }
-    if (!canOpenDispute) {
-      setError("Энэ төлөв дээр маргаан нээх боломжгүй.");
-      return;
-    }
+    if (!reason) return setError("Маргааны шалтгаанаа бичнэ үү.");
+    if (!canOpenDispute) return setError("Энэ төлөв дээр маргаан нээх боломжгүй.");
+    if (disputeLoading) return;
 
     setDisputeLoading(true);
     setError(null);
@@ -514,12 +482,9 @@ export default function DriverDeliveryDetailPage() {
 
       const { error } = await supabase
         .from("deliveries")
-        .update({
-          status: "DISPUTE",
-          dispute_reason: reason,
-          dispute_opened_at: openedAt,
-        })
-        .eq("id", delivery.id);
+        .update({ status: "DISPUTE", dispute_reason: reason, dispute_opened_at: openedAt })
+        .eq("id", delivery.id)
+        .neq("status", "CLOSED");
 
       if (error) {
         console.error(error);
@@ -527,13 +492,7 @@ export default function DriverDeliveryDetailPage() {
         return;
       }
 
-      setDelivery({
-        ...delivery,
-        status: "DISPUTE",
-        dispute_reason: reason,
-        dispute_opened_at: openedAt,
-      });
-
+      setDelivery({ ...delivery, status: "DISPUTE", dispute_reason: reason, dispute_opened_at: openedAt });
       setShowDispute(false);
       setDisputeReason("");
       setMsg("Маргаан нээгдлээ.");
@@ -546,6 +505,7 @@ export default function DriverDeliveryDetailPage() {
   async function resolveDispute() {
     if (!delivery) return;
     if (delivery.status !== "DISPUTE") return;
+    if (resolveLoading) return;
 
     setResolveLoading(true);
     setError(null);
@@ -608,24 +568,14 @@ export default function DriverDeliveryDetailPage() {
           {delivery && b && (
             <div className="flex items-center gap-2">
               <span className="text-xs text-slate-500">{t.icon}</span>
-              <span className={`text-[11px] px-3 py-1.5 rounded-full border ${b.cls}`}>
-                {b.text}
-              </span>
+              <span className={`text-[11px] px-3 py-1.5 rounded-full border ${b.cls}`}>{b.text}</span>
             </div>
           )}
         </div>
 
         {/* alerts */}
-        {error && (
-          <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-            {error}
-          </div>
-        )}
-        {msg && (
-          <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
-            {msg}
-          </div>
-        )}
+        {error && <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
+        {msg && <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">{msg}</div>}
 
         {!delivery ? (
           <div className="rounded-2xl border border-slate-200 bg-white px-4 py-6">
@@ -670,21 +620,15 @@ export default function DriverDeliveryDetailPage() {
 
               {!isChosenDriver && delivery.status !== "OPEN" && delivery.chosen_driver_id && (
                 <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                  <div className="text-xs text-slate-700">
-                    Энэ хүргэлт өөр жолоочид оноогдсон байна.
-                  </div>
+                  <div className="text-xs text-slate-700">Энэ хүргэлт өөр жолоочид оноогдсон байна.</div>
                 </div>
               )}
 
               {delivery.status === "DISPUTE" && (
                 <div className="rounded-xl border border-rose-200 bg-rose-50 p-3">
                   <div className="text-sm font-semibold text-rose-800">Маргаантай</div>
-                  <div className="text-xs text-rose-700 mt-1 whitespace-pre-wrap">
-                    {delivery.dispute_reason || "—"}
-                  </div>
-                  <div className="text-[11px] text-rose-600 mt-1">
-                    Нээсэн: {fmtDT(delivery.dispute_opened_at)}
-                  </div>
+                  <div className="text-xs text-rose-700 mt-1 whitespace-pre-wrap">{delivery.dispute_reason || "—"}</div>
+                  <div className="text-[11px] text-rose-600 mt-1">Нээсэн: {fmtDT(delivery.dispute_opened_at)}</div>
                 </div>
               )}
             </section>
@@ -708,7 +652,6 @@ export default function DriverDeliveryDetailPage() {
               <h2 className="text-sm font-semibold text-slate-900">Үйлдэл</h2>
 
               <div className="flex flex-wrap items-center gap-2">
-                {/* OPEN: Bid */}
                 {delivery.status === "OPEN" && (
                   <>
                     {!myBid ? (
@@ -733,7 +676,6 @@ export default function DriverDeliveryDetailPage() {
                   </>
                 )}
 
-                {/* ASSIGNED -> ON_ROUTE */}
                 {delivery.status === "ASSIGNED" && (
                   <button
                     type="button"
@@ -745,7 +687,6 @@ export default function DriverDeliveryDetailPage() {
                   </button>
                 )}
 
-                {/* ON_ROUTE -> DELIVERED */}
                 {delivery.status === "ON_ROUTE" && (
                   <button
                     type="button"
@@ -757,8 +698,7 @@ export default function DriverDeliveryDetailPage() {
                   </button>
                 )}
 
-                {/* ✅ Маргаан (ON_ROUTE / DELIVERED) */}
-                {(delivery.status === "ON_ROUTE" || delivery.status === "DELIVERED") && (
+                {(delivery.status === "ON_ROUTE" || delivery.status === "DELIVERED" || delivery.status === "PAID") && (
                   <button
                     type="button"
                     onClick={() => setShowDispute(true)}
@@ -768,7 +708,17 @@ export default function DriverDeliveryDetailPage() {
                   </button>
                 )}
 
-                {/* ✅ DISPUTE дээр "Шийдэгдсэн" */}
+                {delivery.status === "PAID" && (
+                  <button
+                    type="button"
+                    onClick={() => void confirmPaymentReceived()}
+                    disabled={confirmPayLoading || !isChosenDriver || delivery.driver_confirmed_payment}
+                    className="text-xs px-4 py-2 rounded-xl bg-slate-900 text-white hover:bg-slate-800 disabled:opacity-60 disabled:cursor-not-allowed"
+                  >
+                    {confirmPayLoading ? "Баталж байна…" : "Төлбөр хүлээн авсан"}
+                  </button>
+                )}
+
                 {delivery.status === "DISPUTE" && (
                   <button
                     type="button"
@@ -779,25 +729,8 @@ export default function DriverDeliveryDetailPage() {
                     {resolveLoading ? "Тэмдэглэж байна…" : "Шийдэгдсэн"}
                   </button>
                 )}
-
-                {/* DELIVERED/CLOSED: confirm payment */}
-                {(delivery.status === "DELIVERED" || delivery.status === "CLOSED") && (
-                  <button
-                    type="button"
-                    onClick={() => void toggleDriverConfirmedPayment()}
-                    disabled={confirmPayLoading || !isChosenDriver}
-                    className="text-xs px-4 py-2 rounded-xl bg-slate-900 text-white hover:bg-slate-800 disabled:opacity-60 disabled:cursor-not-allowed"
-                  >
-                    {confirmPayLoading
-                      ? "Баталж байна…"
-                      : delivery.driver_confirmed_payment
-                      ? "Төлбөрийн баталгаа цуцлах"
-                      : "Төлбөр авснаа батлах"}
-                  </button>
-                )}
               </div>
 
-              {/* Payment status */}
               <div className="pt-2 border-t border-slate-200">
                 <div className="text-[11px] text-slate-600">
                   Худалдагч:{" "}
@@ -828,6 +761,7 @@ export default function DriverDeliveryDetailPage() {
                 <div className="max-w-md w-full rounded-2xl bg-white shadow-lg border border-slate-200 px-4 py-4 space-y-3">
                   <h3 className="text-sm font-semibold text-slate-900">Маргаан үүсгэх (driver)</h3>
                   <p className="text-xs text-slate-600">Товч, тодорхой шалтгаанаа бичнэ үү.</p>
+
                   <textarea
                     value={disputeReason}
                     onChange={(e) => setDisputeReason(e.target.value)}
@@ -835,6 +769,7 @@ export default function DriverDeliveryDetailPage() {
                     className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-rose-500 focus:border-rose-500"
                     placeholder="Юу болсон талаар…"
                   />
+
                   <div className="flex items-center justify-end gap-2 pt-1">
                     <button
                       type="button"
@@ -844,17 +779,10 @@ export default function DriverDeliveryDetailPage() {
                     >
                       Болих
                     </button>
+
                     <button
                       type="button"
-                      onClick={async () => {
-                        if (disputeLoading) return;
-                        setDisputeLoading(true);
-                        try {
-                          await openDispute();
-                        } finally {
-                          setDisputeLoading(false);
-                        }
-                      }}
+                      onClick={() => void openDispute()}
                       disabled={disputeLoading}
                       className="text-[11px] px-3 py-1.5 rounded-full bg-rose-600 text-white hover:bg-rose-700 disabled:opacity-60"
                     >

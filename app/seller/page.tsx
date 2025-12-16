@@ -1,11 +1,13 @@
 "use client";
 
 /* ===========================
- * app/seller/page.tsx (FINAL v2)
+ * app/seller/page.tsx (FINAL v3)
  *
- * ✅ 7 сайжруулалтын дагуу таб/логик хэвээр
- * ✅ OPEN картын UI: Хаанаас → Хаашаа → Юу (тус тусдаа)
- * ✅ "Хүргэлт нэмэх" товчийг буцааж оруулсан
+ * ✅ UI өөрчлөхгүй
+ * ✅ Seller нь ON_ROUTE-г хүчээр үүсгэхгүй (Driver "Барааг авч явлаа" үед л ON_ROUTE)
+ * ✅ CLOSED дээр "устгах" байхгүй
+ * ✅ DELIVERED дээр "Төлбөр төлсөн" хурдан товч (Detail-ийн өмнө)
+ * ✅ Давхар даралтыг actLoading-р түгжинэ (idempotent update)
  * =========================== */
 
 import { useEffect, useMemo, useState } from "react";
@@ -16,6 +18,7 @@ import {
   SELLER_TABS,
   SellerTabId,
   getSellerTabForStatus,
+  canSellerMarkPaid,
 } from "@/lib/deliveryLogic";
 
 type Role = "seller" | "driver";
@@ -39,11 +42,14 @@ type DeliveryRow = {
   price_mnt: number | null;
   delivery_type: string | null;
   chosen_driver_id: string | null;
+
   seller_marked_paid: boolean;
   driver_confirmed_payment: boolean;
+
   closed_at: string | null;
   dispute_reason: string | null;
   dispute_opened_at: string | null;
+
   seller_hidden: boolean;
 
   // UI-only
@@ -72,6 +78,8 @@ function shorten(s: string | null, max = 70) {
 }
 
 function typeLabel(deliveryType: string | null): { icon: string; label: string } {
+  // ⚠️ UI-г өөрчлөхгүй. Одоохондоо хуучин label-уудыг хэвээр үлдээв.
+  // (#13 дээр “2 төрөл” болгохыг дараагийн алхмаар new-delivery дээр нэг мөр болгоно.)
   switch (deliveryType) {
     case "apartment":
       return { icon: "🏙", label: "Байр" };
@@ -96,6 +104,8 @@ function badge(status: DeliveryStatus) {
       return { text: "Замд", cls: "bg-indigo-50 text-indigo-700 border-indigo-100" };
     case "DELIVERED":
       return { text: "Хүргэсэн", cls: "bg-amber-50 text-amber-700 border-amber-100" };
+    case "PAID":
+      return { text: "Төлсөн", cls: "bg-emerald-50 text-emerald-800 border-emerald-100" };
     case "DISPUTE":
       return { text: "Маргаан", cls: "bg-rose-50 text-rose-700 border-rose-100" };
     case "CLOSED":
@@ -231,6 +241,8 @@ export default function SellerDashboardPage() {
         `
         )
         .eq("seller_id", sellerId)
+        // ✅ seller_hidden-г одоохондоо хадгална (хуучин өгөгдөлтэй нийцүүлэх),
+        // ⚠️ Гэхдээ CLOSED дээр "устгах" товч байхгүй болсон.
         .eq("seller_hidden", false)
         .order("created_at", { ascending: false });
 
@@ -289,52 +301,37 @@ export default function SellerDashboardPage() {
     }
   }
 
-  async function markOnRouteFromAssigned(deliveryId: string) {
+  // ✅ Seller: DELIVERED үед л "Төлбөр төлсөн" дарж PAID болгоно
+  async function markPaidQuick(deliveryId: string) {
     if (!user) return;
+    if (actLoading[deliveryId]) return; // ✅ давхар даралт
+
     setActLoading((p) => ({ ...p, [deliveryId]: true }));
     setMsg(null);
     setError(null);
 
     try {
-      const { error: e1 } = await supabase
+      // Idempotent update:
+      // - зөвхөн DELIVERED байгаа, seller_marked_paid=false үед л шинэчилнэ
+      const { data, error: e1 } = await supabase
         .from("deliveries")
-        .update({ status: "ON_ROUTE" })
+        .update({ seller_marked_paid: true, status: "PAID" })
         .eq("id", deliveryId)
-        .eq("seller_id", user.id);
+        .eq("seller_id", user.id)
+        .eq("status", "DELIVERED")
+        .eq("seller_marked_paid", false)
+        .select("id")
+        .maybeSingle();
 
       if (e1) throw e1;
 
+      // Хэрэв аль хэдийн PAID болсон/өөр таб руу шилжсэн байвал data=null байж болно → error биш
       await fetchAll(user.id);
-      changeTab("ON_ROUTE");
-      setMsg("Хүргэлт замд гарлаа.");
+      changeTab("PAID");
+      setMsg("Төлбөр төлсөн гэж тэмдэглэлээ.");
     } catch (e: any) {
       console.error(e);
       setError("Шинэчлэхэд алдаа гарлаа. Дахин оролдоно уу.");
-    } finally {
-      setActLoading((p) => ({ ...p, [deliveryId]: false }));
-    }
-  }
-
-  async function hideFromClosed(deliveryId: string) {
-    if (!user) return;
-    setActLoading((p) => ({ ...p, [deliveryId]: true }));
-    setMsg(null);
-    setError(null);
-
-    try {
-      const { error: e1 } = await supabase
-        .from("deliveries")
-        .update({ seller_hidden: true })
-        .eq("id", deliveryId)
-        .eq("seller_id", user.id);
-
-      if (e1) throw e1;
-
-      await fetchAll(user.id);
-      setMsg("Хаагдсанаас устгалаа.");
-    } catch (e: any) {
-      console.error(e);
-      setError("Устгахад алдаа гарлаа. Дахин оролдоно уу.");
     } finally {
       setActLoading((p) => ({ ...p, [deliveryId]: false }));
     }
@@ -412,6 +409,13 @@ export default function SellerDashboardPage() {
 
               const bidCount = d.status === "OPEN" ? Number(d.bid_count || 0) : 0;
 
+              const canPayQuick =
+                activeTab === "DELIVERED" &&
+                canSellerMarkPaid({
+                  status: d.status,
+                  seller_marked_paid: !!d.seller_marked_paid,
+                });
+
               return (
                 <div
                   key={d.id}
@@ -422,7 +426,9 @@ export default function SellerDashboardPage() {
                     <div className="flex items-center gap-2">
                       <span className="text-lg">{t.icon}</span>
                       <span className="text-sm font-semibold text-slate-900">{t.label}</span>
-                      <span className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${b.cls}`}>
+                      <span
+                        className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${b.cls}`}
+                      >
                         {b.text}
                       </span>
 
@@ -436,7 +442,7 @@ export default function SellerDashboardPage() {
                     <div className="text-xs text-slate-500">{fmtDT(d.created_at)}</div>
                   </div>
 
-                  {/* Main tiles (OPEN/UI clarity) */}
+                  {/* Main tiles */}
                   <div className="mt-4 grid gap-3 md:grid-cols-3">
                     <Pill label="Хаанаас" value={from} accent="emerald" />
                     <Pill label="Хаашаа" value={to} accent="rose" />
@@ -464,28 +470,18 @@ export default function SellerDashboardPage() {
                     </div>
 
                     <div className="flex flex-wrap gap-2">
-                      {/* ASSIGNED дээр "Хүргэлт гарсан" */}
-                      {activeTab === "ASSIGNED" && d.status === "ASSIGNED" && (
+                      {/* ✅ DELIVERED дээр хурдан "Төлбөр төлсөн" (Detail-ийн өмнө) */}
+                      {canPayQuick && (
                         <button
-                          onClick={() => markOnRouteFromAssigned(d.id)}
+                          onClick={() => markPaidQuick(d.id)}
                           disabled={!!actLoading[d.id]}
                           className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
                         >
-                          {actLoading[d.id] ? "Түр хүлээнэ үү…" : "Хүргэлт гарсан"}
+                          {actLoading[d.id] ? "Түр хүлээнэ үү…" : "Төлбөр төлсөн"}
                         </button>
                       )}
 
-                      {/* CLOSED дээр устгах (seller_hidden=true) */}
-                      {activeTab === "CLOSED" && (d.status === "CLOSED" || d.status === "CANCELLED") && (
-                        <button
-                          onClick={() => hideFromClosed(d.id)}
-                          disabled={!!actLoading[d.id]}
-                          className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:border-slate-300 disabled:opacity-60"
-                        >
-                          {actLoading[d.id] ? "Устгаж байна…" : "Хаагдсанаас устгах"}
-                        </button>
-                      )}
-
+                      {/* ✅ Detail (UI хэвээр) */}
                       <button
                         onClick={() => router.push(`/seller/delivery/${d.id}?tab=${activeTab}`)}
                         className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-900 hover:border-slate-300"

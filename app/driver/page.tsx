@@ -1,19 +1,17 @@
 "use client";
 
 /* ===========================
- * app/driver/page.tsx (FINAL v4)
+ * app/driver/page.tsx (FINAL v5)
  *
- * ✅ ШИНЭ ЛОГИК:
- * - "Нээлттэй" таб: OPEN хүргэлтүүд (миний хүсэлт байхгүй)
- * - "Хүсэлт" таб: OPEN хүргэлтүүд (миний хүсэлттэй)
- * - "Намайг сонгосон": ASSIGNED + chosen_driver_id = me
- * - "Замд" / "Хүргэсэн" / "Хаагдсан" / "Маргаан": зөвхөн миний оноогдсон хүргэлтүүд
- * - Хүсэлт таб дээрээс цуцалбал -> Нээлттэй рүү буцна
- * - Сонгогдсон (ASSIGNED) бол цуцлах боломжгүй (зөвхөн seller л цуцална)
- *
- * ✅ QUICK:
- * - DELIVERED дээр "Төлбөр авсан" quick товч
- * - CLOSED дээр "Хаагдсанаас устгах" (driver_hidden=true)
+ * ✅ ЭЦСИЙН ЗӨВ УРСГАЛ (BABA дүрэмтэй 100% нийцсэн):
+ * - OPEN: OPEN хүргэлтүүд (миний хүсэлт байхгүй)
+ * - REQUESTS: OPEN хүргэлтүүд (миний хүсэлттэй)
+ * - ASSIGNED: ASSIGNED + chosen_driver_id = me  → "Барааг авч явлаа" (ON_ROUTE)
+ * - ON_ROUTE: зөвхөн миний оноогдсон → "Хүргэсэн" (DELIVERED)
+ * - DELIVERED: товчгүй (Seller төлбөрөө төлөхийг хүлээнэ → PAID)
+ * - PAID: "Төлбөр хүлээн авсан" → CLOSED
+ * - CLOSED: зөвхөн харах (устгах/нуух байхгүй)
+ * - DISPUTE: зөвхөн харах (энд товчийг дараагийн алхмаар detail дээр цэгцэлнэ)
  * =========================== */
 
 import { useEffect, useMemo, useState } from "react";
@@ -24,7 +22,7 @@ import {
   DRIVER_TABS,
   DriverTabId,
   getDriverTabForStatus,
-  shouldCloseDelivery,
+  canDriverConfirmPayment,
 } from "@/lib/deliveryLogic";
 
 type Role = "seller" | "driver";
@@ -115,6 +113,8 @@ function badge(status: DeliveryStatus) {
       return { text: "Замд", cls: "bg-indigo-50 text-indigo-700 border-indigo-100" };
     case "DELIVERED":
       return { text: "Хүргэсэн", cls: "bg-amber-50 text-amber-700 border-amber-100" };
+    case "PAID":
+      return { text: "Төлсөн", cls: "bg-emerald-50 text-emerald-800 border-emerald-100" };
     case "DISPUTE":
       return { text: "Маргаан", cls: "bg-rose-50 text-rose-700 border-rose-100" };
     case "CLOSED":
@@ -294,6 +294,8 @@ export default function DriverDashboardPage() {
 
   async function placeBid(deliveryId: string) {
     if (!user) return;
+    if (actLoading[deliveryId]) return;
+
     setActLoading((p) => ({ ...p, [deliveryId]: true }));
     setError(null);
     setMsg(null);
@@ -330,16 +332,14 @@ export default function DriverDashboardPage() {
       return;
     }
 
+    if (actLoading[deliveryId]) return;
+
     setActLoading((p) => ({ ...p, [deliveryId]: true }));
     setError(null);
     setMsg(null);
 
     try {
-      const { error: e1 } = await supabase
-        .from("driver_bids")
-        .delete()
-        .eq("id", b.id)
-        .eq("driver_id", user.id);
+      const { error: e1 } = await supabase.from("driver_bids").delete().eq("id", b.id).eq("driver_id", user.id);
 
       if (e1) throw e1;
 
@@ -359,8 +359,91 @@ export default function DriverDashboardPage() {
     }
   }
 
-  async function quickConfirmPayment(deliveryId: string) {
+  // ✅ ASSIGNED → ON_ROUTE ("Барааг авч явлаа") — FIX (stable, one-click)
+async function markPickedUp(deliveryId: string) {
+  if (!user) return;
+  if (actLoading[deliveryId]) return;
+
+  setActLoading((p) => ({ ...p, [deliveryId]: true }));
+  setError(null);
+  setMsg(null);
+
+  try {
+    // ✅ Update + verify (үнэхээр ON_ROUTE болсон эсэх)
+    const { data, error: e1 } = await supabase
+      .from("deliveries")
+      .update({ status: "ON_ROUTE" })
+      .eq("id", deliveryId)
+      .eq("chosen_driver_id", user.id)
+      .eq("status", "ASSIGNED")
+      .select("id,status,chosen_driver_id")
+      .maybeSingle();
+
+    if (e1) throw e1;
+
+    if (!data || data.status !== "ON_ROUTE") {
+      setError("Шилжилт амжилтгүй. (ASSIGNED→ON_ROUTE) Дахин оролдоно уу.");
+      return;
+    }
+
+    // ✅ Local state-г шууд шинэчилнэ (fetchAll дээр найдахгүй)
+    setItems((prev) =>
+      prev.map((x) =>
+        x.id === deliveryId
+          ? { ...x, status: "ON_ROUTE" as any, chosen_driver_id: user.id }
+          : x
+      )
+    );
+
+    // ✅ Tab force
+    changeTab("ON_ROUTE");
+    setMsg("Барааг авч явлаа.");
+
+    // ✅ Background refresh (заавал биш, гэхдээ аюулгүй)
+    void fetchAll(user.id);
+  } catch (e: any) {
+    console.error(e);
+    setError("Шинэчлэхэд алдаа гарлаа. Дахин оролдоно уу.");
+  } finally {
+    setActLoading((p) => ({ ...p, [deliveryId]: false }));
+  }
+}
+
+
+  // ✅ ON_ROUTE → DELIVERED ("Хүргэсэн")
+  async function markDelivered(deliveryId: string) {
     if (!user) return;
+    if (actLoading[deliveryId]) return;
+
+    setActLoading((p) => ({ ...p, [deliveryId]: true }));
+    setError(null);
+    setMsg(null);
+
+    try {
+      const { error: e1 } = await supabase
+        .from("deliveries")
+        .update({ status: "DELIVERED" })
+        .eq("id", deliveryId)
+        .eq("chosen_driver_id", user.id)
+        .eq("status", "ON_ROUTE");
+
+      if (e1) throw e1;
+
+      await fetchAll(user.id);
+      changeTab("DELIVERED");
+      setMsg("Хүргэлтийг хүргэсэн гэж тэмдэглэлээ.");
+    } catch (e: any) {
+      console.error(e);
+      setError("Шинэчлэхэд алдаа гарлаа. Дахин оролдоно уу.");
+    } finally {
+      setActLoading((p) => ({ ...p, [deliveryId]: false }));
+    }
+  }
+
+  // ✅ PAID → CLOSED ("Төлбөр хүлээн авсан")
+  async function confirmPaymentReceived(deliveryId: string) {
+    if (!user) return;
+    if (actLoading[deliveryId]) return;
 
     setActLoading((p) => ({ ...p, [deliveryId]: true }));
     setError(null);
@@ -370,63 +453,38 @@ export default function DriverDashboardPage() {
       const cur = items.find((x) => x.id === deliveryId);
       if (!cur) return;
 
-      if (!(cur.status === "DELIVERED" && cur.chosen_driver_id === user.id)) {
-        setError("Зөвхөн 'Хүргэсэн' үед төлбөр батална.");
+      const ok = canDriverConfirmPayment({
+        status: cur.status,
+        driver_confirmed_payment: !!cur.driver_confirmed_payment,
+      });
+
+      if (!ok || cur.chosen_driver_id !== user.id) {
+        setError("Зөвхөн 'Төлсөн' үед төлбөр хүлээн авснаа батална.");
         return;
       }
 
-      const next = true;
-      const willClose = shouldCloseDelivery({
-        status: cur.status,
-        seller_marked_paid: cur.seller_marked_paid,
-        driver_confirmed_payment: next,
-      });
-
-      const nextStatus: DeliveryStatus = willClose ? "CLOSED" : "DELIVERED";
-      const closedAt = willClose ? new Date().toISOString() : cur.closed_at;
+      const closedAt = new Date().toISOString();
 
       const { error: e1 } = await supabase
         .from("deliveries")
         .update({
-          driver_confirmed_payment: next,
-          status: nextStatus,
+          driver_confirmed_payment: true,
+          status: "CLOSED",
           closed_at: closedAt,
         })
         .eq("id", deliveryId)
         .eq("chosen_driver_id", user.id)
-        .eq("status", "DELIVERED");
+        .eq("status", "PAID")
+        .eq("driver_confirmed_payment", false);
 
       if (e1) throw e1;
 
       await fetchAll(user.id);
-      setMsg("Төлбөр авснаа баталлаа.");
+      changeTab("CLOSED");
+      setMsg("Төлбөр хүлээн авснаа баталлаа.");
     } catch (e: any) {
       console.error(e);
       setError("Төлбөр батлахад алдаа гарлаа.");
-    } finally {
-      setActLoading((p) => ({ ...p, [deliveryId]: false }));
-    }
-  }
-
-  async function hideClosedForDriver(deliveryId: string) {
-    if (!user) return;
-    setActLoading((p) => ({ ...p, [deliveryId]: true }));
-    setError(null);
-    setMsg(null);
-
-    try {
-      const { error: e1 } = await supabase
-        .from("deliveries")
-        .update({ driver_hidden: true })
-        .eq("id", deliveryId);
-
-      if (e1) throw e1;
-
-      await fetchAll(user.id);
-      setMsg("Хаагдсанаас устгалаа.");
-    } catch (e: any) {
-      console.error(e);
-      setError("Устгахад алдаа гарлаа.");
     } finally {
       setActLoading((p) => ({ ...p, [deliveryId]: false }));
     }
@@ -470,7 +528,6 @@ export default function DriverDashboardPage() {
         continue;
       }
 
-      // бусад төлөвүүд зөвхөн минийхийг тоолно
       if (!isMine) continue;
 
       const tab = getDriverTabForStatus(d.status);
@@ -593,30 +650,39 @@ export default function DriverDashboardPage() {
                         </button>
                       )}
 
-                      {/* DELIVERED quick */}
-                      {activeTab === "DELIVERED" &&
-                        d.status === "DELIVERED" &&
+                      {/* ASSIGNED: picked up */}
+                      {activeTab === "ASSIGNED" && d.status === "ASSIGNED" && isMine && (
+                        <button
+                          onClick={() => markPickedUp(d.id)}
+                          disabled={!!actLoading[d.id]}
+                          className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
+                        >
+                          {actLoading[d.id] ? "Түр хүлээнэ үү…" : "Барааг авч явлаа"}
+                        </button>
+                      )}
+
+                      {/* ON_ROUTE: delivered */}
+                      {activeTab === "ON_ROUTE" && d.status === "ON_ROUTE" && isMine && (
+                        <button
+                          onClick={() => markDelivered(d.id)}
+                          disabled={!!actLoading[d.id]}
+                          className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
+                        >
+                          {actLoading[d.id] ? "Түр хүлээнэ үү…" : "Хүргэсэн"}
+                        </button>
+                      )}
+
+                      {/* PAID: confirm payment received */}
+                      {activeTab === "PAID" &&
+                        d.status === "PAID" &&
                         isMine &&
                         !d.driver_confirmed_payment && (
                           <button
-                            onClick={() => quickConfirmPayment(d.id)}
+                            onClick={() => confirmPaymentReceived(d.id)}
                             disabled={!!actLoading[d.id]}
                             className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
                           >
-                            {actLoading[d.id] ? "Баталж байна…" : "Төлбөр авсан"}
-                          </button>
-                        )}
-
-                      {/* CLOSED: hide */}
-                      {activeTab === "CLOSED" &&
-                        (d.status === "CLOSED" || d.status === "CANCELLED") &&
-                        isMine && (
-                          <button
-                            onClick={() => hideClosedForDriver(d.id)}
-                            disabled={!!actLoading[d.id]}
-                            className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:border-slate-300 disabled:opacity-60"
-                          >
-                            {actLoading[d.id] ? "Устгаж байна…" : "Хаагдсанаас устгах"}
+                            {actLoading[d.id] ? "Баталж байна…" : "Төлбөр хүлээн авсан"}
                           </button>
                         )}
 
