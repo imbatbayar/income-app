@@ -1,13 +1,18 @@
-// ===================== lib/deliveryLogic.ts (FINAL v3) =====================
-// Хүргэлтийн статус, табуудын төвлөрсөн логик
+// ===================== lib/deliveryLogic.ts (FINAL v4.1) =====================
+// Хүргэлтийн статус, табуудын төвлөрсөн логик (single source of truth)
 //
-// ✅ Шинэ төлбөрийн урсгал (BABA-ийн дүрэм):
-// 1) Driver "Хүргэсэн" дарснаар статус = DELIVERED → 2 талын "Хүргэсэн" таб руу орно
-// 2) Seller "Төлбөр төлсөн" баталснаар статус = PAID → 2 талын "Төлсөн" таб руу орно
-// 3) Driver "Төлбөр хүлээн авсан" баталснаар статус = CLOSED → 2 талын "Хаагдсан" таб руу орно
+// ✅ Core flow (one-way, rollback байхгүй):
+// OPEN -> ASSIGNED -> ON_ROUTE -> DELIVERED -> PAID -> CLOSED
 //
-// ⚠️ Driver талд "REQUESTS" таб = status биш, UI дээр "myBid байгаа OPEN" гэж салгаж үзүүлнэ.
+// ✅ Dispute:
+// (ON_ROUTE | DELIVERED | PAID) -> DISPUTE -> (resolved)
+//
+// ✅ Compatibility:
+// - boolean талбарууд: seller_marked_paid, driver_confirmed_payment
+// - timestamp талбарууд: delivered_at, seller_paid_at, driver_paid_confirmed_at
+// → 2-г нь зэрэг дэмжинэ
 
+// ---------- STATUS ----------
 export type DeliveryStatus =
   | "OPEN"
   | "ASSIGNED"
@@ -16,10 +21,9 @@ export type DeliveryStatus =
   | "PAID"
   | "DISPUTE"
   | "CLOSED"
-  | "CANCELLED";
+  | "CANCELLED"; // legacy only
 
 // ---------- SELLER TABS ----------
-
 export type SellerTabId =
   | "OPEN"
   | "ASSIGNED"
@@ -36,14 +40,13 @@ export const SELLER_TABS: { id: SellerTabId; label: string }[] = [
   { id: "DELIVERED", label: "Хүргэсэн" },
   { id: "PAID", label: "Төлсөн" },
   { id: "CLOSED", label: "Хаагдсан" },
-  { id: "DISPUTE", label: "Маргаан" }, // ✅ хамгийн сүүлд
+  { id: "DISPUTE", label: "Маргаан" },
 ];
 
 // ---------- DRIVER TABS ----------
-
 export type DriverTabId =
   | "OPEN"
-  | "REQUESTS" // ✅ шинэ таб (миний хүсэлтүүд)
+  | "REQUESTS" // OPEN + myBid
   | "ASSIGNED"
   | "ON_ROUTE"
   | "DELIVERED"
@@ -53,18 +56,16 @@ export type DriverTabId =
 
 export const DRIVER_TABS: { id: DriverTabId; label: string }[] = [
   { id: "OPEN", label: "Нээлттэй" },
-  { id: "REQUESTS", label: "Хүсэлт" }, // ✅ OPEN дээрх "миний хүсэлттэй" хүргэлтүүд
+  { id: "REQUESTS", label: "Хүсэлт" },
   { id: "ASSIGNED", label: "Намайг сонгосон" },
   { id: "ON_ROUTE", label: "Замд" },
   { id: "DELIVERED", label: "Хүргэсэн" },
   { id: "PAID", label: "Төлсөн" },
   { id: "CLOSED", label: "Хаагдсан" },
-  { id: "DISPUTE", label: "Маргаан" }, // ✅ хамгийн сүүлд
+  { id: "DISPUTE", label: "Маргаан" },
 ];
 
-// ---------- ТУСЛАХ ----------
-
-// Статусыг монголоор
+// ---------- LABELS ----------
 export function statusLabel(status: DeliveryStatus): string {
   switch (status) {
     case "OPEN":
@@ -88,12 +89,13 @@ export function statusLabel(status: DeliveryStatus): string {
   }
 }
 
-// Хаалттай ангилал
+// ---------- CLOSED ----------
 export function isClosedStatus(status: DeliveryStatus): boolean {
+  // ❗ Жинхэнэ хаалт бол CLOSED. CANCELLED бол legacy.
   return status === "CLOSED" || status === "CANCELLED";
 }
 
-// Status → SellerTab
+// ---------- STATUS -> TAB ----------
 export function getSellerTabForStatus(status: DeliveryStatus): SellerTabId {
   switch (status) {
     case "OPEN":
@@ -114,8 +116,7 @@ export function getSellerTabForStatus(status: DeliveryStatus): SellerTabId {
   }
 }
 
-// Status → DriverTab
-// (⚠️ REQUESTS энд орохгүй. REQUESTS бол UI дээр myBid-тэй OPEN-оор салгана)
+// REQUESTS энд орохгүй (UI дээр OPEN + myBid-аар салгана)
 export function getDriverTabForStatus(
   status: DeliveryStatus
 ): Exclude<DriverTabId, "REQUESTS"> {
@@ -130,56 +131,140 @@ export function getDriverTabForStatus(
       return "DELIVERED";
     case "PAID":
       return "PAID";
+    case "DISPUTE":
+      return "DISPUTE";
     case "CLOSED":
     case "CANCELLED":
       return "CLOSED";
-    case "DISPUTE":
-      return "DISPUTE";
   }
 }
 
-// ---------- ТӨЛБӨРИЙН ЛОГИК (төвлөрсөн) ----------
-//
-// UI дээрх товч идэвхтэй/идэвхгүй болох шалгуурыг энд төвлөрүүлнэ.
-// Төлөв өөрчлөх (UPDATE) логик нь page.tsx/handler дээр байна.
+// ---------- HELPERS ----------
+function hasTs(v: any): boolean {
+  return !!v;
+}
+function bool(v: any): boolean {
+  return !!v;
+}
 
+// ---------- PERMISSIONS ----------
+
+// ASSIGNED → ON_ROUTE
+export function canDriverMarkOnRoute(input: {
+  status: DeliveryStatus;
+  picked_up_at?: string | null;
+  chosen_driver_id?: string | null;
+  me_driver_id?: string;
+}): boolean {
+  if (isClosedStatus(input.status)) return false;
+
+  const isMine =
+    !input.me_driver_id || !input.chosen_driver_id
+      ? true
+      : input.chosen_driver_id === input.me_driver_id;
+
+  if (!isMine) return false;
+  if (input.status !== "ASSIGNED") return false;
+  if (hasTs(input.picked_up_at)) return false;
+
+  return true;
+}
+
+// ON_ROUTE → DELIVERED
+export function canDriverMarkDelivered(input: {
+  status: DeliveryStatus;
+  delivered_at?: string | null;
+  chosen_driver_id?: string | null;
+  me_driver_id?: string;
+}): boolean {
+  if (isClosedStatus(input.status)) return false;
+
+  const isMine =
+    !input.me_driver_id || !input.chosen_driver_id
+      ? true
+      : input.chosen_driver_id === input.me_driver_id;
+
+  if (!isMine) return false;
+  if (input.status !== "ON_ROUTE") return false;
+  if (hasTs(input.delivered_at)) return false;
+
+  return true;
+}
+
+// DELIVERED → PAID (Seller)
 export function canSellerMarkPaid(input: {
   status: DeliveryStatus;
-  seller_marked_paid: boolean;
+  seller_paid_at?: string | null;
+  seller_marked_paid?: boolean;
 }): boolean {
-  // ✅ Зөвхөн "Хүргэсэн" таб-д ирсэн (DELIVERED) үед идэвхтэй
-  return input.status === "DELIVERED" && !input.seller_marked_paid;
+  if (isClosedStatus(input.status)) return false;
+  if (input.status !== "DELIVERED") return false;
+
+  if (input.seller_paid_at !== undefined) {
+    return !hasTs(input.seller_paid_at);
+  }
+  return !bool(input.seller_marked_paid);
 }
 
+// PAID → CLOSED (Driver) — үндсэн зөв функц
+export function canDriverConfirmPaymentReceived(input: {
+  status: DeliveryStatus;
+  driver_paid_confirmed_at?: string | null;
+  driver_confirmed_payment?: boolean;
+}): boolean {
+  if (isClosedStatus(input.status)) return false;
+  if (input.status !== "PAID") return false;
+
+  if (input.driver_paid_confirmed_at !== undefined) {
+    return !hasTs(input.driver_paid_confirmed_at);
+  }
+  return !bool(input.driver_confirmed_payment);
+}
+
+// 🔧 ALIAS (IMPORT ERROR-ИЙГ БҮРЭН ШИЙДНЭ)
+// app/driver/page.tsx дээр `canDriverConfirmPayment` гэж ашиглаж байгаа тул
+// яг энэ нэртэй export-ыг зориудаар гаргаж өглөө.
 export function canDriverConfirmPayment(input: {
   status: DeliveryStatus;
-  driver_confirmed_payment: boolean;
+  driver_confirmed_payment?: boolean;
 }): boolean {
-  // ✅ Зөвхөн "Төлсөн" (PAID) үед идэвхтэй
-  return input.status === "PAID" && !input.driver_confirmed_payment;
+  return canDriverConfirmPaymentReceived({
+    status: input.status,
+    driver_confirmed_payment: input.driver_confirmed_payment,
+  });
 }
 
-// CLOSED болох ёстой эсэх (товч нэг газар)
-// ✅ зөвхөн PAID дээр driver_confirmed_payment батлагдвал хаагдана
+// ---------- DISPUTE ----------
+export function canOpenDispute(status: DeliveryStatus): boolean {
+  if (isClosedStatus(status)) return false;
+  return status === "ON_ROUTE" || status === "DELIVERED" || status === "PAID";
+}
+
+export function canResolveDispute(input: {
+  status: DeliveryStatus;
+  dispute_status?: "none" | "open" | "resolved" | string | null;
+}): boolean {
+  if (isClosedStatus(input.status)) return false;
+  if (input.status !== "DISPUTE") return false;
+
+  if (input.dispute_status !== undefined && input.dispute_status !== null) {
+    return String(input.dispute_status) === "open";
+  }
+  return true;
+}
+
+// PAID дээр 2 тал баталгаажвал хаах эсэх
 export function shouldCloseDelivery(input: {
   status: DeliveryStatus;
-  seller_marked_paid: boolean;
-  driver_confirmed_payment: boolean;
+  seller_marked_paid?: boolean;
+  driver_confirmed_payment?: boolean;
+  seller_paid_at?: string | null;
+  driver_paid_confirmed_at?: string | null;
 }): boolean {
-  return (
-    input.status === "PAID" &&
-    !!input.seller_marked_paid &&
-    !!input.driver_confirmed_payment
-  );
-}
+  if (input.status !== "PAID") return false;
 
-// ---------- Маргаан нээх боломж ----------
-// ✅ Жолооч тал: ON_ROUTE / DELIVERED / PAID үед (хаагдахаас өмнө)
-export function canOpenDisputeForDriver(status: DeliveryStatus): boolean {
-  return status === "ON_ROUTE" || status === "DELIVERED" || status === "PAID";
-}
-
-// ✅ Худалдагч тал: ON_ROUTE / DELIVERED / PAID үед (хаагдахаас өмнө)
-export function canOpenDisputeForSeller(status: DeliveryStatus): boolean {
-  return status === "ON_ROUTE" || status === "DELIVERED" || status === "PAID";
+  if (input.seller_paid_at !== undefined && input.driver_paid_confirmed_at !== undefined) {
+    return hasTs(input.seller_paid_at) && hasTs(input.driver_paid_confirmed_at);
+  }
+  return bool(input.seller_marked_paid) && bool(input.driver_confirmed_payment);
 }

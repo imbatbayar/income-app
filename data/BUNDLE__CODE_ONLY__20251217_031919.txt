@@ -1,0 +1,87 @@
+﻿BUNDLE__CODE_ONLY
+Root: F:\khurgelt
+Mode: full
+Generated: 2025-12-17 03:19:19
+Files: 19
+================================================================================
+
+# FILE: F:\khurgelt\app\components\Map\DeliveryRouteMap.tsx
+# ERROR: Method invocation failed because [System.IO.Path] does not contain a method named 'GetRelativePath'.
+
+
+# FILE: F:\khurgelt\app\components\Map\useCurvedLine.ts
+# ERROR: Method invocation failed because [System.IO.Path] does not contain a method named 'GetRelativePath'.
+
+
+# FILE: F:\khurgelt\app\driver\delivery\[id]\page.tsx
+# ERROR: Method invocation failed because [System.IO.Path] does not contain a method named 'GetRelativePath'.
+
+
+# FILE: F:\khurgelt\app\driver\page.tsx
+# ERROR: Method invocation failed because [System.IO.Path] does not contain a method named 'GetRelativePath'.
+
+
+# FILE: F:\khurgelt\app\driver\profile\page.tsx
+# ERROR: Method invocation failed because [System.IO.Path] does not contain a method named 'GetRelativePath'.
+
+
+# FILE: F:\khurgelt\app\globals.css
+# ERROR: Method invocation failed because [System.IO.Path] does not contain a method named 'GetRelativePath'.
+
+
+# FILE: F:\khurgelt\app\layout.tsx
+# ERROR: Method invocation failed because [System.IO.Path] does not contain a method named 'GetRelativePath'.
+
+
+# FILE: F:\khurgelt\app\page.tsx
+# ERROR: Method invocation failed because [System.IO.Path] does not contain a method named 'GetRelativePath'.
+
+
+# FILE: F:\khurgelt\app\register\page.tsx
+# ERROR: Method invocation failed because [System.IO.Path] does not contain a method named 'GetRelativePath'.
+
+
+# FILE: F:\khurgelt\app\seller\delivery\[id]\page.tsx
+# ERROR: Method invocation failed because [System.IO.Path] does not contain a method named 'GetRelativePath'.
+
+
+# FILE: F:\khurgelt\app\seller\new-delivery\page.tsx
+# ERROR: Method invocation failed because [System.IO.Path] does not contain a method named 'GetRelativePath'.
+
+
+# FILE: F:\khurgelt\app\seller\page.tsx
+# ERROR: Method invocation failed because [System.IO.Path] does not contain a method named 'GetRelativePath'.
+
+
+# FILE: F:\khurgelt\lib\deliveryLogic.ts
+# ERROR: Method invocation failed because [System.IO.Path] does not contain a method named 'GetRelativePath'.
+
+
+# FILE: F:\khurgelt\lib\supabase.ts
+# ERROR: Method invocation failed because [System.IO.Path] does not contain a method named 'GetRelativePath'.
+
+
+# FILE: F:\khurgelt\lib\types.ts
+# ERROR: Method invocation failed because [System.IO.Path] does not contain a method named 'GetRelativePath'.
+
+
+# FILE: F:\khurgelt\package.json
+# ERROR: Method invocation failed because [System.IO.Path] does not contain a method named 'GetRelativePath'.
+
+
+# FILE: F:\khurgelt\package-lock.json
+# ERROR: Method invocation failed because [System.IO.Path] does not contain a method named 'GetRelativePath'.
+
+
+# FILE: F:\khurgelt\postcss.config.mjs
+# ERROR: Method invocation failed because [System.IO.Path] does not contain a method named 'GetRelativePath'.
+
+
+# FILE: F:\khurgelt\tsconfig.json
+# ERROR: Method invocation failed because [System.IO.Path] does not contain a method named 'GetRelativePath'.
+
+
+================================================================================
+Written: 0
+SkippedBinary: 0
+SkippedErrors: 19

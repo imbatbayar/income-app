@@ -1,17 +1,21 @@
 "use client";
 
 /* ===========================
- * app/driver/page.tsx (FINAL v5)
+ * app/driver/page.tsx (FINAL v6.0)
  *
- * ✅ ЭЦСИЙН ЗӨВ УРСГАЛ (BABA дүрэмтэй 100% нийцсэн):
- * - OPEN: OPEN хүргэлтүүд (миний хүсэлт байхгүй)
- * - REQUESTS: OPEN хүргэлтүүд (миний хүсэлттэй)
- * - ASSIGNED: ASSIGNED + chosen_driver_id = me  → "Барааг авч явлаа" (ON_ROUTE)
- * - ON_ROUTE: зөвхөн миний оноогдсон → "Хүргэсэн" (DELIVERED)
- * - DELIVERED: товчгүй (Seller төлбөрөө төлөхийг хүлээнэ → PAID)
- * - PAID: "Төлбөр хүлээн авсан" → CLOSED
- * - CLOSED: зөвхөн харах (устгах/нуух байхгүй)
- * - DISPUTE: зөвхөн харах (энд товчийг дараагийн алхмаар detail дээр цэгцэлнэ)
+ * ✅ NEW FLOW (BABA rule):
+ * - ASSIGNED -> ON_ROUTE : SELLER тал "Жолооч барааг авч явлаа" дарна
+ *   → Driver тал ASSIGNED дээр ямар ч товч байхгүй (зөвхөн харах)
+ *
+ * Driver actions:
+ * - OPEN: "Авах хүсэлт"
+ * - REQUESTS: "Хүсэлт цуцлах"
+ * - ON_ROUTE: "Хүргэсэн" (DELIVERED)
+ * - PAID: "Төлбөр хүлээн авсан" (CLOSED)
+ *
+ * ⚠ Privacy:
+ * - Энэ list page дээр buyer-н нарийн хаяг/утас огт харуулахгүй.
+ *   (Private info-г зөвхөн /driver/delivery/[id] дээр ON_ROUTE+ үед chosen driver-т харуулна)
  * =========================== */
 
 import { useEffect, useMemo, useState } from "react";
@@ -21,7 +25,6 @@ import {
   DeliveryStatus,
   DRIVER_TABS,
   DriverTabId,
-  getDriverTabForStatus,
   canDriverConfirmPayment,
 } from "@/lib/deliveryLogic";
 
@@ -81,26 +84,11 @@ function fmtDT(iso: string | null | undefined) {
   }
 }
 
-function shorten(s: string | null, max = 70) {
-  if (!s) return "—";
-  const t = s.trim();
-  if (t.length <= max) return t;
-  return t.slice(0, max).replace(/\s+$/, "") + "…";
-}
-
-function typeLabel(deliveryType: string | null): { icon: string; label: string } {
-  switch (deliveryType) {
-    case "apartment":
-      return { icon: "🏙", label: "Байр" };
-    case "ger":
-      return { icon: "🏠", label: "Гэр хороолол" };
-    case "camp":
-      return { icon: "🏕", label: "Лагер" };
-    case "countryside":
-      return { icon: "🚌", label: "Орон нутаг" };
-    default:
-      return { icon: "📦", label: "Хүргэлт" };
-  }
+function shorten(s: string | null, n = 60) {
+  const t = String(s || "").trim();
+  if (!t) return "";
+  if (t.length <= n) return t;
+  return t.slice(0, n).replace(/\s+$/, "") + "…";
 }
 
 function badge(status: DeliveryStatus) {
@@ -108,7 +96,7 @@ function badge(status: DeliveryStatus) {
     case "OPEN":
       return { text: "Нээлттэй", cls: "bg-emerald-50 text-emerald-700 border-emerald-100" };
     case "ASSIGNED":
-      return { text: "Оносон", cls: "bg-sky-50 text-sky-700 border-sky-100" };
+      return { text: "Танд оноосон", cls: "bg-sky-50 text-sky-700 border-sky-100" };
     case "ON_ROUTE":
       return { text: "Замд", cls: "bg-indigo-50 text-indigo-700 border-indigo-100" };
     case "DELIVERED":
@@ -126,47 +114,24 @@ function badge(status: DeliveryStatus) {
   }
 }
 
-function Pill({
-  label,
-  value,
-  accent = "slate",
-}: {
-  label: string;
-  value: string;
-  accent?: "emerald" | "rose" | "sky" | "slate";
-}) {
-  const acc =
-    accent === "emerald"
-      ? "bg-emerald-50 border-emerald-100 text-emerald-800"
-      : accent === "rose"
-      ? "bg-rose-50 border-rose-100 text-rose-800"
-      : accent === "sky"
-      ? "bg-sky-50 border-sky-100 text-sky-800"
-      : "bg-slate-50 border-slate-200 text-slate-800";
-
-  return (
-    <div className={`rounded-xl border px-3 py-2 ${acc}`}>
-      <div className="text-[11px] opacity-70">{label}</div>
-      <div className="text-sm font-semibold leading-snug">{value}</div>
-    </div>
-  );
-}
-
-export default function DriverDashboardPage() {
+export default function DriverPage() {
   const router = useRouter();
   const sp = useSearchParams();
 
   const [user, setUser] = useState<IncomeUser | null>(null);
   const [activeTab, setActiveTab] = useState<DriverTabId>("OPEN");
 
-  const [loading, setLoading] = useState(true);
   const [items, setItems] = useState<DeliveryRow[]>([]);
-  const [myBids, setMyBids] = useState<Record<string, BidLite>>({});
+  const [myBids, setMyBids] = useState<BidLite[]>([]);
+
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
+
+  // action lock per deliveryId
   const [actLoading, setActLoading] = useState<Record<string, boolean>>({});
 
-  // auth
+  // ---------------- auth ----------------
   useEffect(() => {
     try {
       const raw = window.localStorage.getItem("incomeUser");
@@ -179,38 +144,16 @@ export default function DriverDashboardPage() {
     }
   }, [router]);
 
-  // init tab
+  // ---------------- tab init ----------------
   useEffect(() => {
-    const urlTab = sp.get("tab");
-    const valid = DRIVER_TABS.some((t) => t.id === (urlTab as any));
-    if (urlTab && valid) {
-      setActiveTab(urlTab as DriverTabId);
-      localStorage.setItem("driverActiveTab", urlTab);
-      return;
-    }
-    const stored = localStorage.getItem("driverActiveTab");
-    const validStored = DRIVER_TABS.some((t) => t.id === (stored as any));
-    if (stored && validStored) setActiveTab(stored as DriverTabId);
+    const q = sp.get("tab") as DriverTabId | null;
+    if (q && DRIVER_TABS.find((t) => t.id === q)) setActiveTab(q);
   }, [sp]);
 
-  function changeTab(tab: DriverTabId) {
-    setActiveTab(tab);
-    localStorage.setItem("driverActiveTab", tab);
-    router.push(`/driver?tab=${tab}`);
-  }
-
-  // fetch
+  // ---------------- data load ----------------
   useEffect(() => {
     if (!user) return;
     void fetchAll(user.id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user?.id]);
-
-  useEffect(() => {
-    if (!user) return;
-    const onFocus = () => void fetchAll(user.id);
-    window.addEventListener("focus", onFocus);
-    return () => window.removeEventListener("focus", onFocus);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id]);
 
@@ -219,80 +162,72 @@ export default function DriverDashboardPage() {
     setError(null);
 
     try {
-      // ✅ OPEN бүх хүргэлтүүд (driver_hidden шүүлт хийнэ)
-      // ✅ Бусад төлөвүүд: зөвхөн надад оноогдсон
-      const { data, error: e1 } = await supabase
+      // 1) deliveries (exclude hidden)
+      const { data: d1, error: e1 } = await supabase
         .from("deliveries")
         .select(
-          `
-          id,
-          seller_id,
-          from_address,
-          to_address,
-          note,
-          status,
-          created_at,
-          price_mnt,
-          delivery_type,
-          chosen_driver_id,
-          seller_marked_paid,
-          driver_confirmed_payment,
-          dispute_opened_at,
-          closed_at,
-          driver_hidden
-        `
+          "id,seller_id,from_address,to_address,note,status,created_at,price_mnt,delivery_type,chosen_driver_id,seller_marked_paid,driver_confirmed_payment,dispute_opened_at,closed_at,driver_hidden"
         )
-        .or(`status.eq.OPEN,chosen_driver_id.eq.${driverId}`)
         .eq("driver_hidden", false)
         .order("created_at", { ascending: false });
 
       if (e1) throw e1;
 
-      const base: DeliveryRow[] = (data || []).map((d: any) => ({
-        id: d.id,
-        seller_id: d.seller_id,
-        from_address: d.from_address,
-        to_address: d.to_address,
-        note: d.note,
-        status: d.status,
-        created_at: d.created_at,
-        price_mnt: d.price_mnt,
-        delivery_type: d.delivery_type,
-        chosen_driver_id: d.chosen_driver_id,
-        seller_marked_paid: !!d.seller_marked_paid,
-        driver_confirmed_payment: !!d.driver_confirmed_payment,
-        dispute_opened_at: d.dispute_opened_at,
-        closed_at: d.closed_at,
-        driver_hidden: !!d.driver_hidden,
-      }));
-
-      // my bids
-      const { data: bids, error: e2 } = await supabase
+      // 2) my bids (OPEN/REQUESTS section)
+      const { data: b1, error: e2 } = await supabase
         .from("driver_bids")
-        .select("id, driver_id, delivery_id, created_at")
-        .eq("driver_id", driverId);
+        .select("id,driver_id,delivery_id,created_at")
+        .eq("driver_id", driverId)
+        .order("created_at", { ascending: false });
 
       if (e2) throw e2;
 
-      const bm: Record<string, BidLite> = {};
-      (bids || []).forEach((b: any) => {
-        bm[b.delivery_id] = b;
-      });
-
-      setItems(base);
-      setMyBids(bm);
-      setMsg(null);
+      setItems((d1 || []) as DeliveryRow[]);
+      setMyBids((b1 || []) as BidLite[]);
     } catch (e: any) {
       console.error(e);
-      setError("Өгөгдөл татахад алдаа гарлаа. Дахин оролдоно уу.");
+      setError("Мэдээлэл ачааллахад алдаа гарлаа.");
     } finally {
       setLoading(false);
     }
   }
 
-  // --------- ACTIONS ---------
+  // ---------------- computed ----------------
 
-  async function placeBid(deliveryId: string) {
+  const myBidSet = useMemo(() => {
+    const s = new Set<string>();
+    for (const b of myBids) s.add(b.delivery_id);
+    return s;
+  }, [myBids]);
+
+  const filtered = useMemo(() => {
+    if (!user) return [];
+
+    return items.filter((d) => {
+      // OPEN/REQUESTS: only OPEN deliveries
+      if (activeTab === "OPEN") return d.status === "OPEN" && !myBidSet.has(d.id);
+      if (activeTab === "REQUESTS") return d.status === "OPEN" && myBidSet.has(d.id);
+
+      // Only my assigned flows
+      if (activeTab === "ASSIGNED") return d.status === "ASSIGNED" && d.chosen_driver_id === user.id;
+      if (activeTab === "ON_ROUTE") return d.status === "ON_ROUTE" && d.chosen_driver_id === user.id;
+      if (activeTab === "DELIVERED") return d.status === "DELIVERED" && d.chosen_driver_id === user.id;
+      if (activeTab === "PAID") return d.status === "PAID" && d.chosen_driver_id === user.id;
+      if (activeTab === "CLOSED") return d.status === "CLOSED" && d.chosen_driver_id === user.id;
+      if (activeTab === "DISPUTE") return d.status === "DISPUTE" && d.chosen_driver_id === user.id;
+
+      return false;
+    });
+  }, [items, activeTab, myBidSet, user]);
+
+  function changeTab(tab: DriverTabId) {
+    setActiveTab(tab);
+    router.push(`/driver?tab=${tab}`);
+  }
+
+  // ---------------- actions ----------------
+
+  async function requestDelivery(deliveryId: string) {
     if (!user) return;
     if (actLoading[deliveryId]) return;
 
@@ -301,17 +236,21 @@ export default function DriverDashboardPage() {
     setMsg(null);
 
     try {
-      const { data, error: e1 } = await supabase
+      const { data, error } = await supabase
         .from("driver_bids")
-        .insert({ delivery_id: deliveryId, driver_id: user.id })
-        .select("id, driver_id, delivery_id, created_at")
+        .insert({ driver_id: user.id, delivery_id: deliveryId })
+        .select("id,driver_id,delivery_id,created_at")
         .maybeSingle();
 
-      if (e1) throw e1;
+      if (error) {
+        console.warn(error);
+      } else if (data) {
+        setMyBids((prev) => [{ ...(data as any) }, ...prev]);
+      }
 
-      setMyBids((p) => ({ ...p, [deliveryId]: data as any }));
-      setMsg("Авах хүсэлт илгээлээ.");
       changeTab("REQUESTS");
+      setMsg("Хүсэлт илгээлээ.");
+      void fetchAll(user.id);
     } catch (e: any) {
       console.error(e);
       setError("Хүсэлт илгээхэд алдаа гарлаа.");
@@ -320,18 +259,8 @@ export default function DriverDashboardPage() {
     }
   }
 
-  async function cancelBid(deliveryId: string) {
+  async function cancelRequest(deliveryId: string) {
     if (!user) return;
-    const b = myBids[deliveryId];
-    if (!b) return;
-
-    // ✅ Сонгогдсон бол цуцлахгүй (OPEN дээр л цуцлах боломжтой)
-    const cur = items.find((x) => x.id === deliveryId);
-    if (cur && cur.status !== "OPEN") {
-      setError("Сонгогдсон/явж буй хүргэлт дээр хүсэлт цуцлах боломжгүй.");
-      return;
-    }
-
     if (actLoading[deliveryId]) return;
 
     setActLoading((p) => ({ ...p, [deliveryId]: true }));
@@ -339,18 +268,21 @@ export default function DriverDashboardPage() {
     setMsg(null);
 
     try {
-      const { error: e1 } = await supabase.from("driver_bids").delete().eq("id", b.id).eq("driver_id", user.id);
+      const my = myBids.find((b) => b.delivery_id === deliveryId);
+      if (my) {
+        const { error } = await supabase
+          .from("driver_bids")
+          .delete()
+          .eq("id", my.id)
+          .eq("driver_id", user.id);
 
-      if (e1) throw e1;
+        if (error) throw error;
+        setMyBids((prev) => prev.filter((x) => x.id !== my.id));
+      }
 
-      setMyBids((p) => {
-        const c = { ...p };
-        delete c[deliveryId];
-        return c;
-      });
-
-      setMsg("Хүсэлт цуцлагдлаа.");
+      setMsg("Хүсэлт цуцаллаа.");
       changeTab("OPEN");
+      void fetchAll(user.id);
     } catch (e: any) {
       console.error(e);
       setError("Хүсэлт цуцлахад алдаа гарлаа.");
@@ -359,58 +291,7 @@ export default function DriverDashboardPage() {
     }
   }
 
-  // ✅ ASSIGNED → ON_ROUTE ("Барааг авч явлаа") — FIX (stable, one-click)
-async function markPickedUp(deliveryId: string) {
-  if (!user) return;
-  if (actLoading[deliveryId]) return;
-
-  setActLoading((p) => ({ ...p, [deliveryId]: true }));
-  setError(null);
-  setMsg(null);
-
-  try {
-    // ✅ Update + verify (үнэхээр ON_ROUTE болсон эсэх)
-    const { data, error: e1 } = await supabase
-      .from("deliveries")
-      .update({ status: "ON_ROUTE" })
-      .eq("id", deliveryId)
-      .eq("chosen_driver_id", user.id)
-      .eq("status", "ASSIGNED")
-      .select("id,status,chosen_driver_id")
-      .maybeSingle();
-
-    if (e1) throw e1;
-
-    if (!data || data.status !== "ON_ROUTE") {
-      setError("Шилжилт амжилтгүй. (ASSIGNED→ON_ROUTE) Дахин оролдоно уу.");
-      return;
-    }
-
-    // ✅ Local state-г шууд шинэчилнэ (fetchAll дээр найдахгүй)
-    setItems((prev) =>
-      prev.map((x) =>
-        x.id === deliveryId
-          ? { ...x, status: "ON_ROUTE" as any, chosen_driver_id: user.id }
-          : x
-      )
-    );
-
-    // ✅ Tab force
-    changeTab("ON_ROUTE");
-    setMsg("Барааг авч явлаа.");
-
-    // ✅ Background refresh (заавал биш, гэхдээ аюулгүй)
-    void fetchAll(user.id);
-  } catch (e: any) {
-    console.error(e);
-    setError("Шинэчлэхэд алдаа гарлаа. Дахин оролдоно уу.");
-  } finally {
-    setActLoading((p) => ({ ...p, [deliveryId]: false }));
-  }
-}
-
-
-  // ✅ ON_ROUTE → DELIVERED ("Хүргэсэн")
+  // ✅ ON_ROUTE → DELIVERED
   async function markDelivered(deliveryId: string) {
     if (!user) return;
     if (actLoading[deliveryId]) return;
@@ -420,18 +301,26 @@ async function markPickedUp(deliveryId: string) {
     setMsg(null);
 
     try {
-      const { error: e1 } = await supabase
+      const { data, error: e1 } = await supabase
         .from("deliveries")
         .update({ status: "DELIVERED" })
         .eq("id", deliveryId)
         .eq("chosen_driver_id", user.id)
-        .eq("status", "ON_ROUTE");
+        .eq("status", "ON_ROUTE")
+        .select("id,status")
+        .maybeSingle();
 
       if (e1) throw e1;
 
-      await fetchAll(user.id);
+      if (!data || data.status !== "DELIVERED") {
+        setError("Шилжилт амжилтгүй. (ON_ROUTE→DELIVERED) Дахин оролдоно уу.");
+        return;
+      }
+
+      setItems((prev) => prev.map((x) => (x.id === deliveryId ? { ...x, status: "DELIVERED" as any } : x)));
       changeTab("DELIVERED");
       setMsg("Хүргэлтийг хүргэсэн гэж тэмдэглэлээ.");
+      void fetchAll(user.id);
     } catch (e: any) {
       console.error(e);
       setError("Шинэчлэхэд алдаа гарлаа. Дахин оролдоно уу.");
@@ -440,7 +329,7 @@ async function markPickedUp(deliveryId: string) {
     }
   }
 
-  // ✅ PAID → CLOSED ("Төлбөр хүлээн авсан")
+  // ✅ PAID → CLOSED
   async function confirmPaymentReceived(deliveryId: string) {
     if (!user) return;
     if (actLoading[deliveryId]) return;
@@ -458,14 +347,16 @@ async function markPickedUp(deliveryId: string) {
         driver_confirmed_payment: !!cur.driver_confirmed_payment,
       });
 
-      if (!ok || cur.chosen_driver_id !== user.id) {
+      const isMine = cur.chosen_driver_id === user.id;
+
+      if (!ok || !isMine) {
         setError("Зөвхөн 'Төлсөн' үед төлбөр хүлээн авснаа батална.");
         return;
       }
 
       const closedAt = new Date().toISOString();
 
-      const { error: e1 } = await supabase
+      const { data, error: e1 } = await supabase
         .from("deliveries")
         .update({
           driver_confirmed_payment: true,
@@ -475,13 +366,33 @@ async function markPickedUp(deliveryId: string) {
         .eq("id", deliveryId)
         .eq("chosen_driver_id", user.id)
         .eq("status", "PAID")
-        .eq("driver_confirmed_payment", false);
+        .eq("driver_confirmed_payment", false)
+        .select("id,status,driver_confirmed_payment,closed_at")
+        .maybeSingle();
 
       if (e1) throw e1;
 
-      await fetchAll(user.id);
+      if (!data || data.status !== "CLOSED") {
+        setError("Шилжилт амжилтгүй. (PAID→CLOSED) Дахин оролдоно уу.");
+        return;
+      }
+
+      setItems((prev) =>
+        prev.map((x) =>
+          x.id === deliveryId
+            ? {
+                ...x,
+                status: "CLOSED" as any,
+                driver_confirmed_payment: true,
+                closed_at: (data as any).closed_at ?? closedAt,
+              }
+            : x
+        )
+      );
+
       changeTab("CLOSED");
       setMsg("Төлбөр хүлээн авснаа баталлаа.");
+      void fetchAll(user.id);
     } catch (e: any) {
       console.error(e);
       setError("Төлбөр батлахад алдаа гарлаа.");
@@ -490,148 +401,123 @@ async function markPickedUp(deliveryId: string) {
     }
   }
 
-  // --------- FILTER + COUNTS ---------
+  // ---------------- UI ----------------
 
-  const filtered = useMemo(() => {
-    if (!user) return [];
-
-    return items.filter((d) => {
-      // OPEN ба REQUESTS нь OPEN статус дээр "myBid" байгаа/эсэхээр сална
-      const hasMyBid = !!myBids[d.id];
-      const isMine = d.chosen_driver_id === user.id;
-
-      if (activeTab === "OPEN") {
-        return d.status === "OPEN" && !hasMyBid;
-      }
-      if (activeTab === "REQUESTS") {
-        return d.status === "OPEN" && hasMyBid;
-      }
-
-      // бусад табууд: status + зөвхөн миний оноогдсон
-      return getDriverTabForStatus(d.status) === activeTab && isMine;
-    });
-  }, [activeTab, items, myBids, user]);
-
-  const tabCounts = useMemo(() => {
-    if (!user) return Object.fromEntries(DRIVER_TABS.map((t) => [t.id, 0])) as Record<string, number>;
-
-    const c: Record<string, number> = {};
-    for (const t of DRIVER_TABS) c[t.id] = 0;
-
-    for (const d of items) {
-      const hasMyBid = !!myBids[d.id];
-      const isMine = d.chosen_driver_id === user.id;
-
-      if (d.status === "OPEN") {
-        if (hasMyBid) c["REQUESTS"] = (c["REQUESTS"] || 0) + 1;
-        else c["OPEN"] = (c["OPEN"] || 0) + 1;
-        continue;
-      }
-
-      if (!isMine) continue;
-
-      const tab = getDriverTabForStatus(d.status);
-      c[tab] = (c[tab] || 0) + 1;
-    }
-
-    return c;
-  }, [items, myBids, user]);
-
-  // --------- UI ---------
+  if (!user) return null;
 
   return (
     <div className="min-h-screen bg-slate-50">
-      <div className="mx-auto max-w-5xl px-4 pb-12 pt-6">
-        <div className="mb-4">
-          <div className="text-xs text-slate-500">Жолооч</div>
+      <div className="mx-auto max-w-5xl px-4 py-6">
+        {/* header */}
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <div className="text-sm text-slate-500">INCOME</div>
+            <h1 className="text-xl font-bold text-slate-900">Жолооч</h1>
+            <div className="text-xs text-slate-500 mt-1">
+              {user.name} · {user.phone}
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => router.push("/driver/profile")}
+              className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-900 hover:border-slate-300"
+            >
+              Профайл
+            </button>
+          </div>
         </div>
 
-        <div className="mb-5 flex flex-wrap gap-2">
+        {/* tabs */}
+        <div className="mt-5 flex flex-wrap gap-2">
           {DRIVER_TABS.map((t) => {
-            const isActive = t.id === activeTab;
-            const n = tabCounts[t.id] || 0;
+            const active = activeTab === t.id;
             return (
               <button
                 key={t.id}
                 onClick={() => changeTab(t.id)}
-                className={`rounded-xl border px-3 py-2 text-sm font-semibold transition ${
-                  isActive
-                    ? "border-slate-900 bg-white text-slate-900 shadow-sm"
-                    : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"
-                }`}
+                className={
+                  active
+                    ? "rounded-full bg-slate-900 text-white px-4 py-2 text-sm font-semibold"
+                    : "rounded-full border border-slate-200 bg-white text-slate-700 px-4 py-2 text-sm font-semibold hover:border-slate-300"
+                }
               >
-                {t.label} <span className="ml-1 text-xs opacity-70">({n})</span>
+                {t.label}
               </button>
             );
           })}
         </div>
 
-        {error && (
-          <div className="mb-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">
-            {error}
-          </div>
-        )}
-        {msg && (
-          <div className="mb-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
-            {msg}
-          </div>
-        )}
+        {/* status line */}
+        <div className="mt-4 space-y-2">
+          {error && (
+            <div className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">
+              {error}
+            </div>
+          )}
+          {msg && (
+            <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-700">
+              {msg}
+            </div>
+          )}
 
-        {loading ? (
-          <div className="rounded-2xl border border-slate-200 bg-white p-6 text-slate-600">Ачаалж байна…</div>
-        ) : filtered.length === 0 ? (
-          <div className="rounded-2xl border border-slate-200 bg-white p-6 text-slate-600">
-            Энэ таб дээр одоогоор хүргэлт алга.
-          </div>
-        ) : (
-          <div className="grid gap-4">
-            {filtered.map((d) => {
-              const b = badge(d.status);
-              const t = typeLabel(d.delivery_type);
+          {/* ASSIGNED info note (new rule) */}
+          {activeTab === "ASSIGNED" && (
+            <div className="rounded-xl border border-slate-200 bg-white p-3 text-xs text-slate-600">
+              Энэ таб дээрх хүргэлтүүдийг <span className="font-semibold">худалдагч</span> “Жолооч барааг авч явлаа”
+              гэж тэмдэглэсний дараа л “Замд” таб руу шилжинэ. Жолооч эндээс товч дарахгүй.
+            </div>
+          )}
+        </div>
 
-              const from = shorten(d.from_address, 48);
-              const to = shorten(d.to_address, 48);
-              const what = shorten(d.note, 80);
+        {/* list */}
+        <div className="mt-4">
+          {loading ? (
+            <div className="rounded-2xl border border-slate-200 bg-white p-6 text-sm text-slate-600">
+              Ачаалж байна…
+            </div>
+          ) : filtered.length === 0 ? (
+            <div className="rounded-2xl border border-slate-200 bg-white p-6 text-sm text-slate-600">
+              Энэ таб дээр хүргэлт алга.
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 gap-3">
+              {filtered.map((d) => {
+                const b = badge(d.status);
+                const isMine = d.chosen_driver_id === user.id;
 
-              const hasMyBid = !!myBids[d.id];
-              const isMine = user ? d.chosen_driver_id === user.id : false;
+                return (
+                  <div key={d.id} className="rounded-2xl border border-slate-200 bg-white p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs ${b.cls}`}>
+                            {b.text}
+                          </span>
+                          <span className="text-xs text-slate-500">{fmtDT(d.created_at)}</span>
+                        </div>
 
-              return (
-                <div key={d.id} className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div className="flex items-center gap-2">
-                      <span className="text-lg">{t.icon}</span>
-                      <span className="text-sm font-semibold text-slate-900">{t.label}</span>
-                      <span className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${b.cls}`}>
-                        {b.text}
-                      </span>
-                      {isMine && d.status !== "OPEN" && (
-                        <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-semibold text-slate-700">
-                          Танд
-                        </span>
-                      )}
+                        <div className="mt-2 text-sm font-semibold text-slate-900">
+                          {shorten(d.from_address, 80)} → {shorten(d.to_address, 80)}
+                        </div>
+
+                        {d.note && <div className="mt-1 text-xs text-slate-600">{shorten(d.note, 120)}</div>}
+
+                        <div className="mt-2 text-sm font-bold text-slate-900">{fmtPrice(d.price_mnt)}</div>
+                      </div>
+
+                      <div className="shrink-0">
+                        <div className="text-xs text-slate-500 text-right">ID</div>
+                        <div className="text-xs font-mono text-slate-600">{d.id.slice(0, 8)}…</div>
+                      </div>
                     </div>
-                    <div className="text-xs text-slate-500">{fmtDT(d.created_at)}</div>
-                  </div>
 
-                  <div className="mt-4 grid gap-3 md:grid-cols-3">
-                    <Pill label="Хаанаас" value={from} accent="emerald" />
-                    <Pill label="Хаашаа" value={to} accent="rose" />
-                    <Pill label="Юу хүргэх" value={what} accent="sky" />
-                  </div>
-
-                  <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900">
-                        {fmtPrice(d.price_mnt)}
-                      </span>
-                    </div>
-
-                    <div className="flex flex-wrap gap-2">
-                      {/* OPEN tab: request */}
-                      {activeTab === "OPEN" && d.status === "OPEN" && !hasMyBid && (
+                    {/* actions */}
+                    <div className="mt-4 flex flex-wrap items-center gap-2">
+                      {/* OPEN: request */}
+                      {activeTab === "OPEN" && d.status === "OPEN" && (
                         <button
-                          onClick={() => placeBid(d.id)}
+                          onClick={() => requestDelivery(d.id)}
                           disabled={!!actLoading[d.id]}
                           className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
                         >
@@ -639,52 +525,45 @@ async function markPickedUp(deliveryId: string) {
                         </button>
                       )}
 
-                      {/* REQUESTS tab: cancel */}
-                      {activeTab === "REQUESTS" && d.status === "OPEN" && hasMyBid && (
+                      {/* REQUESTS: cancel request */}
+                      {activeTab === "REQUESTS" && d.status === "OPEN" && (
                         <button
-                          onClick={() => cancelBid(d.id)}
+                          onClick={() => cancelRequest(d.id)}
                           disabled={!!actLoading[d.id]}
-                          className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:border-slate-300 disabled:opacity-60"
+                          className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-100 disabled:opacity-60"
                         >
-                          {actLoading[d.id] ? "Цуцалж байна…" : "Хүсэлт цуцлах"}
+                          {actLoading[d.id] ? "Түр хүлээнэ үү…" : "Хүсэлт цуцлах"}
                         </button>
                       )}
 
-                      {/* ASSIGNED: picked up */}
+                      {/* ✅ ASSIGNED: NO ACTION (seller marks ON_ROUTE) */}
                       {activeTab === "ASSIGNED" && d.status === "ASSIGNED" && isMine && (
-                        <button
-                          onClick={() => markPickedUp(d.id)}
-                          disabled={!!actLoading[d.id]}
-                          className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
-                        >
-                          {actLoading[d.id] ? "Түр хүлээнэ үү…" : "Барааг авч явлаа"}
-                        </button>
+                        <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                          Худалдагч “Жолооч барааг авч явлаа” гэж тэмдэглэсний дараа үргэлжилнэ.
+                        </div>
                       )}
 
-                      {/* ON_ROUTE: delivered */}
+                      {/* ON_ROUTE: mark delivered */}
                       {activeTab === "ON_ROUTE" && d.status === "ON_ROUTE" && isMine && (
                         <button
                           onClick={() => markDelivered(d.id)}
                           disabled={!!actLoading[d.id]}
-                          className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
+                          className="rounded-xl bg-amber-600 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-700 disabled:opacity-60"
                         >
                           {actLoading[d.id] ? "Түр хүлээнэ үү…" : "Хүргэсэн"}
                         </button>
                       )}
 
                       {/* PAID: confirm payment received */}
-                      {activeTab === "PAID" &&
-                        d.status === "PAID" &&
-                        isMine &&
-                        !d.driver_confirmed_payment && (
-                          <button
-                            onClick={() => confirmPaymentReceived(d.id)}
-                            disabled={!!actLoading[d.id]}
-                            className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
-                          >
-                            {actLoading[d.id] ? "Баталж байна…" : "Төлбөр хүлээн авсан"}
-                          </button>
-                        )}
+                      {activeTab === "PAID" && d.status === "PAID" && isMine && !d.driver_confirmed_payment && (
+                        <button
+                          onClick={() => confirmPaymentReceived(d.id)}
+                          disabled={!!actLoading[d.id]}
+                          className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
+                        >
+                          {actLoading[d.id] ? "Баталж байна…" : "Төлбөр хүлээн авсан"}
+                        </button>
+                      )}
 
                       <button
                         onClick={() => router.push(`/driver/delivery/${d.id}?tab=${activeTab}`)}
@@ -694,11 +573,11 @@ async function markPickedUp(deliveryId: string) {
                       </button>
                     </div>
                   </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
+                );
+              })}
+            </div>
+          )}
+        </div>
 
         <div className="mt-10 flex items-center justify-between gap-3 text-xs text-slate-500">
           <span>INCOME · Driver</span>

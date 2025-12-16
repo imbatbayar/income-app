@@ -1,10 +1,10 @@
 "use client";
 
 /* ===========================
- * app/seller/page.tsx (FINAL v3)
+ * app/seller/page.tsx (FINAL v3.1)
  *
  * ✅ UI өөрчлөхгүй
- * ✅ Seller нь ON_ROUTE-г хүчээр үүсгэхгүй (Driver "Барааг авч явлаа" үед л ON_ROUTE)
+ * ✅ ASSIGNED үед Seller "Жолооч барааг авч явлаа" → ON_ROUTE (шинэ дүрэм)
  * ✅ CLOSED дээр "устгах" байхгүй
  * ✅ DELIVERED дээр "Төлбөр төлсөн" хурдан товч (Detail-ийн өмнө)
  * ✅ Давхар даралтыг actLoading-р түгжинэ (idempotent update)
@@ -241,8 +241,6 @@ export default function SellerDashboardPage() {
         `
         )
         .eq("seller_id", sellerId)
-        // ✅ seller_hidden-г одоохондоо хадгална (хуучин өгөгдөлтэй нийцүүлэх),
-        // ⚠️ Гэхдээ CLOSED дээр "устгах" товч байхгүй болсон.
         .eq("seller_hidden", false)
         .order("created_at", { ascending: false });
 
@@ -301,18 +299,63 @@ export default function SellerDashboardPage() {
     }
   }
 
-  // ✅ Seller: DELIVERED үед л "Төлбөр төлсөн" дарж PAID болгоно
-  async function markPaidQuick(deliveryId: string) {
+  // ✅ Seller: ASSIGNED үед "Жолооч барааг авч явлаа" → ON_ROUTE
+  async function markOnRouteBySeller(deliveryId: string) {
     if (!user) return;
-    if (actLoading[deliveryId]) return; // ✅ давхар даралт
+    if (actLoading[deliveryId]) return;
 
     setActLoading((p) => ({ ...p, [deliveryId]: true }));
     setMsg(null);
     setError(null);
 
     try {
-      // Idempotent update:
-      // - зөвхөн DELIVERED байгаа, seller_marked_paid=false үед л шинэчилнэ
+      // ✅ Update + verify (idempotent & guarded)
+      const { data, error: e1 } = await supabase
+        .from("deliveries")
+        .update({ status: "ON_ROUTE" })
+        .eq("id", deliveryId)
+        .eq("seller_id", user.id)
+        .eq("status", "ASSIGNED")
+        .not("chosen_driver_id", "is", null)
+        .select("id,status")
+        .maybeSingle();
+
+      if (e1) throw e1;
+
+      if (!data || (data as any).status !== "ON_ROUTE") {
+        setError("Шилжилт амжилтгүй. (ASSIGNED→ON_ROUTE) Дахин оролдоно уу.");
+        return;
+      }
+
+      // ✅ local state update
+      setItems((prev) =>
+        prev.map((x) => (x.id === deliveryId ? { ...x, status: "ON_ROUTE" as any } : x))
+      );
+
+      // ✅ tab force
+      changeTab("ON_ROUTE");
+      setMsg("Жолооч барааг авч явсан гэж тэмдэглэлээ.");
+
+      // ✅ background refresh
+      void fetchAll(user.id);
+    } catch (e: any) {
+      console.error(e);
+      setError("Шинэчлэхэд алдаа гарлаа. Дахин оролдоно уу.");
+    } finally {
+      setActLoading((p) => ({ ...p, [deliveryId]: false }));
+    }
+  }
+
+  // ✅ Seller: DELIVERED үед л "Төлбөр төлсөн" дарж PAID болгоно
+  async function markPaidQuick(deliveryId: string) {
+    if (!user) return;
+    if (actLoading[deliveryId]) return;
+
+    setActLoading((p) => ({ ...p, [deliveryId]: true }));
+    setMsg(null);
+    setError(null);
+
+    try {
       const { data, error: e1 } = await supabase
         .from("deliveries")
         .update({ seller_marked_paid: true, status: "PAID" })
@@ -320,15 +363,24 @@ export default function SellerDashboardPage() {
         .eq("seller_id", user.id)
         .eq("status", "DELIVERED")
         .eq("seller_marked_paid", false)
-        .select("id")
+        .select("id,status,seller_marked_paid")
         .maybeSingle();
 
       if (e1) throw e1;
 
-      // Хэрэв аль хэдийн PAID болсон/өөр таб руу шилжсэн байвал data=null байж болно → error биш
-      await fetchAll(user.id);
+      // local update
+      if (data) {
+        setItems((prev) =>
+          prev.map((x) =>
+            x.id === deliveryId ? { ...x, status: "PAID" as any, seller_marked_paid: true } : x
+          )
+        );
+      }
+
       changeTab("PAID");
       setMsg("Төлбөр төлсөн гэж тэмдэглэлээ.");
+
+      void fetchAll(user.id);
     } catch (e: any) {
       console.error(e);
       setError("Шинэчлэхэд алдаа гарлаа. Дахин оролдоно уу.");
@@ -416,6 +468,11 @@ export default function SellerDashboardPage() {
                   seller_marked_paid: !!d.seller_marked_paid,
                 });
 
+              const canSellerOnRoute =
+                activeTab === "ASSIGNED" &&
+                d.status === "ASSIGNED" &&
+                !!d.chosen_driver_id;
+
               return (
                 <div
                   key={d.id}
@@ -470,7 +527,18 @@ export default function SellerDashboardPage() {
                     </div>
 
                     <div className="flex flex-wrap gap-2">
-                      {/* ✅ DELIVERED дээр хурдан "Төлбөр төлсөн" (Detail-ийн өмнө) */}
+                      {/* ✅ ASSIGNED дээр Seller: "Жолооч барааг авч явлаа" */}
+                      {canSellerOnRoute && (
+                        <button
+                          onClick={() => markOnRouteBySeller(d.id)}
+                          disabled={!!actLoading[d.id]}
+                          className="rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-60"
+                        >
+                          {actLoading[d.id] ? "Түр хүлээнэ үү…" : "Жолооч барааг авч явлаа"}
+                        </button>
+                      )}
+
+                      {/* ✅ DELIVERED дээр хурдан "Төлбөр төлсөн" */}
                       {canPayQuick && (
                         <button
                           onClick={() => markPaidQuick(d.id)}
@@ -481,7 +549,7 @@ export default function SellerDashboardPage() {
                         </button>
                       )}
 
-                      {/* ✅ Detail (UI хэвээр) */}
+                      {/* ✅ Detail */}
                       <button
                         onClick={() => router.push(`/seller/delivery/${d.id}?tab=${activeTab}`)}
                         className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-900 hover:border-slate-300"

@@ -1,17 +1,18 @@
 "use client";
 
 /* ===========================
- * app/seller/delivery/[id]/page.tsx (FINAL v6.1)
+ * app/seller/delivery/[id]/page.tsx (FINAL v6.2)
  *
- * ✅ Added:
+ * ✅ Added/Kept:
  * - Driver bank info (driver_profiles) + Copy
  * - Visible only when status in: DELIVERED / PAID / DISPUTE / CLOSED
  *
  * ✅ BABA Rules (Seller detail):
- * - Seller NEVER sets ON_ROUTE. (Driver only)
- * - DELIVERED tab: only "Төлбөр төлсөн" + "Маргаан"
- * - ON_ROUTE tab: only "Маргаан"
- * - DISPUTE tab: only "Шийдсэн"
+ * - Seller sets ON_ROUTE (ASSIGNED -> ON_ROUTE) from Seller dashboard (list), NOT from this detail page.
+ * - ON_ROUTE: only "Маргаан"
+ * - DELIVERED: only "Төлбөр төлсөн" + "Маргаан"
+ * - PAID: no action (driver confirms)
+ * - DISPUTE: only "Шийдэгдсэн" (resolve)
  * - NO: cancel / hide / rollback payment
  * =========================== */
 
@@ -280,7 +281,6 @@ export default function SellerDeliveryDetailPage() {
 
       setDelivery(d);
 
-      // bids (only for OPEN, but safe)
       const { data: bidRows, error: e2 } = await supabase
         .from("driver_bids")
         .select(
@@ -301,7 +301,6 @@ export default function SellerDeliveryDetailPage() {
       if (e2) setBids([]);
       else setBids((bidRows as any) || []);
 
-      // ✅ bank load (only when allowed)
       await maybeLoadDriverBank(d);
     } finally {
       setLoading(false);
@@ -345,7 +344,6 @@ export default function SellerDeliveryDetailPage() {
 
   // ---------------- actions ----------------
 
-  // OPEN -> choose driver -> ASSIGNED
   async function chooseDriver(driverId: string) {
     if (!delivery || !user) return;
 
@@ -354,7 +352,7 @@ export default function SellerDeliveryDetailPage() {
       return;
     }
 
-    if (chooseLoading) return; // double-click guard
+    if (chooseLoading) return;
 
     setChooseLoading(driverId);
     setError(null);
@@ -383,7 +381,6 @@ export default function SellerDeliveryDetailPage() {
     }
   }
 
-  // ✅ Seller payment confirm: DELIVERED -> PAID (one-way, no rollback)
   async function markPaid() {
     if (!delivery || !user) return;
     if (markPaidLoading) return;
@@ -428,7 +425,6 @@ export default function SellerDeliveryDetailPage() {
     }
   }
 
-  // dispute allowed: ON_ROUTE / DELIVERED / PAID (хаагдахаас өмнө)
   const canOpenDispute = useMemo(() => {
     if (!delivery) return false;
     if (delivery.status === "DISPUTE" || delivery.status === "CLOSED" || delivery.status === "CANCELLED") return false;
@@ -465,6 +461,8 @@ export default function SellerDeliveryDetailPage() {
         })
         .eq("id", delivery.id)
         .eq("seller_id", user.id)
+        // ✅ stale/double-click guard
+        .eq("status", delivery.status)
         .neq("status", "CLOSED");
 
       if (error) {
@@ -487,7 +485,6 @@ export default function SellerDeliveryDetailPage() {
     }
   }
 
-  // DISPUTE -> CLOSED (seller resolves)
   async function resolveDispute() {
     if (!delivery || !user) return;
     if (delivery.status !== "DISPUTE") return;
@@ -582,7 +579,6 @@ export default function SellerDeliveryDetailPage() {
   return (
     <div className="min-h-screen bg-slate-50">
       <main className="max-w-3xl mx-auto px-4 py-6 space-y-4">
-        {/* header */}
         <div className="flex items-center justify-between gap-3">
           <button
             onClick={goBack}
@@ -599,7 +595,6 @@ export default function SellerDeliveryDetailPage() {
           )}
         </div>
 
-        {/* alerts */}
         {error && (
           <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>
         )}
@@ -613,7 +608,6 @@ export default function SellerDeliveryDetailPage() {
           </div>
         ) : (
           <>
-            {/* main card */}
             <section className="rounded-2xl border border-slate-200 bg-white p-4 space-y-3">
               <div className="flex items-start justify-between gap-4">
                 <div className="space-y-1">
@@ -657,7 +651,6 @@ export default function SellerDeliveryDetailPage() {
               )}
             </section>
 
-            {/* ✅ driver bank card */}
             {showBank && (
               <section className="rounded-2xl border border-slate-200 bg-white p-4 space-y-3">
                 <div className="flex items-center justify-between gap-3">
@@ -694,7 +687,6 @@ export default function SellerDeliveryDetailPage() {
               </section>
             )}
 
-            {/* map preview */}
             {hasMap && (
               <section className="rounded-2xl border border-slate-200 bg-white p-4 space-y-3">
                 <h2 className="text-sm font-semibold text-slate-900">Хүргэлтийн чиглэл</h2>
@@ -708,11 +700,9 @@ export default function SellerDeliveryDetailPage() {
               </section>
             )}
 
-            {/* actions */}
             <section className="rounded-2xl border border-slate-200 bg-white p-4 space-y-3">
               <h2 className="text-sm font-semibold text-slate-900">Үйлдэл</h2>
 
-              {/* OPEN: bids list */}
               {delivery.status === "OPEN" && (
                 <div className="space-y-2">
                   <div className="text-xs text-slate-600">Жолооч сонгох:</div>
@@ -760,9 +750,7 @@ export default function SellerDeliveryDetailPage() {
                 </div>
               )}
 
-              {/* ✅ Quick actions row — only allowed buttons */}
               <div className="flex flex-wrap items-center gap-2">
-                {/* ON_ROUTE: only dispute */}
                 {delivery.status === "ON_ROUTE" && (
                   <button
                     type="button"
@@ -773,7 +761,6 @@ export default function SellerDeliveryDetailPage() {
                   </button>
                 )}
 
-                {/* DELIVERED: Pay + Dispute only */}
                 {delivery.status === "DELIVERED" && (
                   <>
                     <button
@@ -795,7 +782,6 @@ export default function SellerDeliveryDetailPage() {
                   </>
                 )}
 
-                {/* DISPUTE: resolved */}
                 {delivery.status === "DISPUTE" && (
                   <button
                     type="button"
@@ -809,7 +795,6 @@ export default function SellerDeliveryDetailPage() {
                 )}
               </div>
 
-              {/* Payment info (read-only) */}
               <div className="pt-2 border-t border-slate-200">
                 <div className="space-y-1">
                   <div className="text-sm font-semibold text-slate-900">Төлбөр</div>
@@ -837,7 +822,6 @@ export default function SellerDeliveryDetailPage() {
               </div>
             </section>
 
-            {/* dispute modal */}
             {showDispute && (
               <div className="fixed inset-0 z-20 flex items-center justify-center bg-black/30 px-4">
                 <div className="max-w-md w-full rounded-2xl bg-white shadow-lg border border-slate-200 px-4 py-4 space-y-3">
