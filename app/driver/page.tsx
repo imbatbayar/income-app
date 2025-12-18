@@ -1,21 +1,26 @@
 "use client";
 
 /* ===========================
- * app/driver/page.tsx (FINAL v6.0)
+ * app/driver/page.tsx (FINAL v7.1)
  *
- * ✅ NEW FLOW (BABA rule):
- * - ASSIGNED -> ON_ROUTE : SELLER тал "Жолооч барааг авч явлаа" дарна
- *   → Driver тал ASSIGNED дээр ямар ч товч байхгүй (зөвхөн харах)
+ * ✅ Driver талд Seller info (name+phone) нэмэв:
+ * - ASSIGNED / ON_ROUTE / DELIVERED дээр (зөвхөн өөрт оноогдсон үед)
+ * - tel: залгах товч
  *
- * Driver actions:
+ * ✅ Flow:
+ * OPEN -> ASSIGNED -> ON_ROUTE -> DELIVERED
+ * ✅ Seller action:
+ * - ASSIGNED -> ON_ROUTE : SELLER тал "Жолооч барааг авч явлаа"
+ *
+ * ✅ Driver actions:
  * - OPEN: "Авах хүсэлт"
  * - REQUESTS: "Хүсэлт цуцлах"
- * - ON_ROUTE: "Хүргэсэн" (DELIVERED)
- * - PAID: "Төлбөр хүлээн авсан" (CLOSED)
+ * - ON_ROUTE: "Хүргэсэн"
+ * - DELIVERED: "Устгах" (driver_hidden=true)
  *
  * ⚠ Privacy:
- * - Энэ list page дээр buyer-н нарийн хаяг/утас огт харуулахгүй.
- *   (Private info-г зөвхөн /driver/delivery/[id] дээр ON_ROUTE+ үед chosen driver-т харуулна)
+ * - List дээр buyer-н нарийн хаяг/утас огт харуулахгүй.
+ *   (Private info зөвхөн /driver/delivery/[id] дээр ON_ROUTE+ үед)
  * =========================== */
 
 import { useEffect, useMemo, useState } from "react";
@@ -25,7 +30,7 @@ import {
   DeliveryStatus,
   DRIVER_TABS,
   DriverTabId,
-  canDriverConfirmPayment,
+  getDriverTabForStatus,
 } from "@/lib/deliveryLogic";
 
 type Role = "seller" | "driver";
@@ -54,6 +59,7 @@ type DeliveryRow = {
 
   chosen_driver_id: string | null;
 
+  // legacy (query-д байж болох ч UI таб/товч байхгүй)
   seller_marked_paid: boolean;
   driver_confirmed_payment: boolean;
 
@@ -68,6 +74,12 @@ type BidLite = {
   driver_id: string;
   delivery_id: string;
   created_at: string;
+};
+
+type SellerLite = {
+  id: string;
+  name: string | null;
+  phone: string | null;
 };
 
 function fmtPrice(n: number | null | undefined) {
@@ -101,6 +113,8 @@ function badge(status: DeliveryStatus) {
       return { text: "Замд", cls: "bg-indigo-50 text-indigo-700 border-indigo-100" };
     case "DELIVERED":
       return { text: "Хүргэсэн", cls: "bg-amber-50 text-amber-700 border-amber-100" };
+
+    // legacy badge (табууд байхгүй ч харагдаж болно)
     case "PAID":
       return { text: "Төлсөн", cls: "bg-emerald-50 text-emerald-800 border-emerald-100" };
     case "DISPUTE":
@@ -123,6 +137,8 @@ export default function DriverPage() {
 
   const [items, setItems] = useState<DeliveryRow[]>([]);
   const [myBids, setMyBids] = useState<BidLite[]>([]);
+
+  const [sellerMap, setSellerMap] = useState<Record<string, SellerLite>>({});
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -157,6 +173,43 @@ export default function DriverPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id]);
 
+  async function fetchSellersForMine(deliveries: DeliveryRow[], driverId: string) {
+    // Зөвхөн өөрт оноогдсон, OPEN биш төлвүүдийн seller_id-г татна
+    const sellerIds = Array.from(
+      new Set(
+        deliveries
+          .filter((d) => d.chosen_driver_id === driverId && d.status !== "OPEN")
+          .map((d) => d.seller_id)
+          .filter(Boolean)
+      )
+    );
+
+    if (!sellerIds.length) {
+      setSellerMap({});
+      return;
+    }
+
+    try {
+      const { data, error } = await supabase
+        .from("users")
+        .select("id,name,phone")
+        .in("id", sellerIds);
+
+      if (error) {
+        console.warn(error);
+        return;
+      }
+
+      const map: Record<string, SellerLite> = {};
+      for (const u of (data || []) as any[]) {
+        map[u.id] = { id: u.id, name: u.name ?? null, phone: u.phone ?? null };
+      }
+      setSellerMap(map);
+    } catch (e) {
+      console.warn(e);
+    }
+  }
+
   async function fetchAll(driverId: string) {
     setLoading(true);
     setError(null);
@@ -182,8 +235,12 @@ export default function DriverPage() {
 
       if (e2) throw e2;
 
-      setItems((d1 || []) as DeliveryRow[]);
+      const deliveries = (d1 || []) as DeliveryRow[];
+      setItems(deliveries);
       setMyBids((b1 || []) as BidLite[]);
+
+      // ✅ seller info preload
+      void fetchSellersForMine(deliveries, driverId);
     } catch (e: any) {
       console.error(e);
       setError("Мэдээлэл ачааллахад алдаа гарлаа.");
@@ -193,7 +250,6 @@ export default function DriverPage() {
   }
 
   // ---------------- computed ----------------
-
   const myBidSet = useMemo(() => {
     const s = new Set<string>();
     for (const b of myBids) s.add(b.delivery_id);
@@ -211,10 +267,12 @@ export default function DriverPage() {
       // Only my assigned flows
       if (activeTab === "ASSIGNED") return d.status === "ASSIGNED" && d.chosen_driver_id === user.id;
       if (activeTab === "ON_ROUTE") return d.status === "ON_ROUTE" && d.chosen_driver_id === user.id;
-      if (activeTab === "DELIVERED") return d.status === "DELIVERED" && d.chosen_driver_id === user.id;
-      if (activeTab === "PAID") return d.status === "PAID" && d.chosen_driver_id === user.id;
-      if (activeTab === "CLOSED") return d.status === "CLOSED" && d.chosen_driver_id === user.id;
-      if (activeTab === "DISPUTE") return d.status === "DISPUTE" && d.chosen_driver_id === user.id;
+
+      // DELIVERED tab: status DELIVERED + legacy statuses (UI нэгтгэл)
+      if (activeTab === "DELIVERED") {
+        const tab = getDriverTabForStatus(d.status);
+        return tab === "DELIVERED" && d.chosen_driver_id === user.id;
+      }
 
       return false;
     });
@@ -226,7 +284,6 @@ export default function DriverPage() {
   }
 
   // ---------------- actions ----------------
-
   async function requestDelivery(deliveryId: string) {
     if (!user) return;
     if (actLoading[deliveryId]) return;
@@ -277,6 +334,8 @@ export default function DriverPage() {
           .eq("driver_id", user.id);
 
         if (error) throw error;
+
+        // ✅ local state sync
         setMyBids((prev) => prev.filter((x) => x.id !== my.id));
       }
 
@@ -317,7 +376,10 @@ export default function DriverPage() {
         return;
       }
 
-      setItems((prev) => prev.map((x) => (x.id === deliveryId ? { ...x, status: "DELIVERED" as any } : x)));
+      setItems((prev) =>
+        prev.map((x) => (x.id === deliveryId ? { ...x, status: "DELIVERED" as any } : x))
+      );
+
       changeTab("DELIVERED");
       setMsg("Хүргэлтийг хүргэсэн гэж тэмдэглэлээ.");
       void fetchAll(user.id);
@@ -329,8 +391,8 @@ export default function DriverPage() {
     }
   }
 
-  // ✅ PAID → CLOSED
-  async function confirmPaymentReceived(deliveryId: string) {
+  // ✅ DELIVERED дээр устгах (driver_hidden=true)
+  async function hideDelivered(deliveryId: string) {
     if (!user) return;
     if (actLoading[deliveryId]) return;
 
@@ -339,70 +401,33 @@ export default function DriverPage() {
     setMsg(null);
 
     try {
-      const cur = items.find((x) => x.id === deliveryId);
-      if (!cur) return;
-
-      const ok = canDriverConfirmPayment({
-        status: cur.status,
-        driver_confirmed_payment: !!cur.driver_confirmed_payment,
-      });
-
-      const isMine = cur.chosen_driver_id === user.id;
-
-      if (!ok || !isMine) {
-        setError("Зөвхөн 'Төлсөн' үед төлбөр хүлээн авснаа батална.");
-        return;
-      }
-
-      const closedAt = new Date().toISOString();
-
       const { data, error: e1 } = await supabase
         .from("deliveries")
-        .update({
-          driver_confirmed_payment: true,
-          status: "CLOSED",
-          closed_at: closedAt,
-        })
+        .update({ driver_hidden: true })
         .eq("id", deliveryId)
         .eq("chosen_driver_id", user.id)
-        .eq("status", "PAID")
-        .eq("driver_confirmed_payment", false)
-        .select("id,status,driver_confirmed_payment,closed_at")
+        .select("id,driver_hidden")
         .maybeSingle();
 
       if (e1) throw e1;
-
-      if (!data || data.status !== "CLOSED") {
-        setError("Шилжилт амжилтгүй. (PAID→CLOSED) Дахин оролдоно уу.");
+      if (!data || !(data as any).driver_hidden) {
+        setError("Устгах үйлдэл амжилтгүй. Дахин оролдоно уу.");
         return;
       }
 
-      setItems((prev) =>
-        prev.map((x) =>
-          x.id === deliveryId
-            ? {
-                ...x,
-                status: "CLOSED" as any,
-                driver_confirmed_payment: true,
-                closed_at: (data as any).closed_at ?? closedAt,
-              }
-            : x
-        )
-      );
+      setItems((prev) => prev.filter((x) => x.id !== deliveryId));
 
-      changeTab("CLOSED");
-      setMsg("Төлбөр хүлээн авснаа баталлаа.");
+      setMsg("Хүргэсэн хүргэлтийг устгалаа.");
       void fetchAll(user.id);
     } catch (e: any) {
       console.error(e);
-      setError("Төлбөр батлахад алдаа гарлаа.");
+      setError("Устгахад алдаа гарлаа.");
     } finally {
       setActLoading((p) => ({ ...p, [deliveryId]: false }));
     }
   }
 
   // ---------------- UI ----------------
-
   if (!user) return null;
 
   return (
@@ -413,7 +438,7 @@ export default function DriverPage() {
           <div>
             <div className="text-sm text-slate-500">INCOME</div>
             <h1 className="text-xl font-bold text-slate-900">Жолооч</h1>
-            <div className="text-xs text-slate-500 mt-1">
+            <div className="mt-1 text-xs text-slate-500">
               {user.name} · {user.phone}
             </div>
           </div>
@@ -461,11 +486,16 @@ export default function DriverPage() {
             </div>
           )}
 
-          {/* ASSIGNED info note (new rule) */}
           {activeTab === "ASSIGNED" && (
             <div className="rounded-xl border border-slate-200 bg-white p-3 text-xs text-slate-600">
               Энэ таб дээрх хүргэлтүүдийг <span className="font-semibold">худалдагч</span> “Жолооч барааг авч явлаа”
-              гэж тэмдэглэсний дараа л “Замд” таб руу шилжинэ. Жолооч эндээс товч дарахгүй.
+              гэж тэмдэглэсний дараа л “Замд” таб руу шилжинэ.
+            </div>
+          )}
+
+          {activeTab === "DELIVERED" && (
+            <div className="rounded-xl border border-slate-200 bg-white p-3 text-xs text-slate-600">
+              “Хүргэсэн” таб дээрх хүргэлтүүдийг устгаж болно. (Зөвхөн танд харагдахгүй болгоно.)
             </div>
           )}
         </div>
@@ -485,6 +515,7 @@ export default function DriverPage() {
               {filtered.map((d) => {
                 const b = badge(d.status);
                 const isMine = d.chosen_driver_id === user.id;
+                const seller = isMine ? sellerMap[d.seller_id] : undefined;
 
                 return (
                   <div key={d.id} className="rounded-2xl border border-slate-200 bg-white p-4">
@@ -504,6 +535,31 @@ export default function DriverPage() {
                         {d.note && <div className="mt-1 text-xs text-slate-600">{shorten(d.note, 120)}</div>}
 
                         <div className="mt-2 text-sm font-bold text-slate-900">{fmtPrice(d.price_mnt)}</div>
+
+                        {/* ✅ Seller info: зөвхөн өөрт оноогдсон үед */}
+                        {isMine && d.status !== "OPEN" && (
+                          <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                            <div className="text-[11px] text-slate-500">Худалдагч</div>
+                            <div className="mt-1 flex flex-wrap items-center gap-2">
+                              <div className="text-xs font-semibold text-slate-800">
+                                {seller?.name || "—"}
+                              </div>
+                              {seller?.phone ? (
+                                <>
+                                  <div className="text-xs text-slate-600">{seller.phone}</div>
+                                  <a
+                                    href={`tel:${seller.phone}`}
+                                    className="ml-auto rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800"
+                                  >
+                                    Залгах
+                                  </a>
+                                </>
+                              ) : (
+                                <div className="text-xs text-slate-500">Утас: —</div>
+                              )}
+                            </div>
+                          </div>
+                        )}
                       </div>
 
                       <div className="shrink-0">
@@ -514,7 +570,6 @@ export default function DriverPage() {
 
                     {/* actions */}
                     <div className="mt-4 flex flex-wrap items-center gap-2">
-                      {/* OPEN: request */}
                       {activeTab === "OPEN" && d.status === "OPEN" && (
                         <button
                           onClick={() => requestDelivery(d.id)}
@@ -525,7 +580,6 @@ export default function DriverPage() {
                         </button>
                       )}
 
-                      {/* REQUESTS: cancel request */}
                       {activeTab === "REQUESTS" && d.status === "OPEN" && (
                         <button
                           onClick={() => cancelRequest(d.id)}
@@ -536,14 +590,6 @@ export default function DriverPage() {
                         </button>
                       )}
 
-                      {/* ✅ ASSIGNED: NO ACTION (seller marks ON_ROUTE) */}
-                      {activeTab === "ASSIGNED" && d.status === "ASSIGNED" && isMine && (
-                        <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
-                          Худалдагч “Жолооч барааг авч явлаа” гэж тэмдэглэсний дараа үргэлжилнэ.
-                        </div>
-                      )}
-
-                      {/* ON_ROUTE: mark delivered */}
                       {activeTab === "ON_ROUTE" && d.status === "ON_ROUTE" && isMine && (
                         <button
                           onClick={() => markDelivered(d.id)}
@@ -554,14 +600,13 @@ export default function DriverPage() {
                         </button>
                       )}
 
-                      {/* PAID: confirm payment received */}
-                      {activeTab === "PAID" && d.status === "PAID" && isMine && !d.driver_confirmed_payment && (
+                      {activeTab === "DELIVERED" && isMine && (
                         <button
-                          onClick={() => confirmPaymentReceived(d.id)}
+                          onClick={() => hideDelivered(d.id)}
                           disabled={!!actLoading[d.id]}
-                          className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
+                          className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-900 hover:border-slate-300 disabled:opacity-60"
                         >
-                          {actLoading[d.id] ? "Баталж байна…" : "Төлбөр хүлээн авсан"}
+                          {actLoading[d.id] ? "Түр хүлээнэ үү…" : "Устгах"}
                         </button>
                       )}
 

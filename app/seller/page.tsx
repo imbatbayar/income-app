@@ -1,15 +1,5 @@
 "use client";
 
-/* ===========================
- * app/seller/page.tsx (FINAL v3.1)
- *
- * ✅ UI өөрчлөхгүй
- * ✅ ASSIGNED үед Seller "Жолооч барааг авч явлаа" → ON_ROUTE (шинэ дүрэм)
- * ✅ CLOSED дээр "устгах" байхгүй
- * ✅ DELIVERED дээр "Төлбөр төлсөн" хурдан товч (Detail-ийн өмнө)
- * ✅ Давхар даралтыг actLoading-р түгжинэ (idempotent update)
- * =========================== */
-
 import { useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
@@ -18,7 +8,6 @@ import {
   SELLER_TABS,
   SellerTabId,
   getSellerTabForStatus,
-  canSellerMarkPaid,
 } from "@/lib/deliveryLogic";
 
 type Role = "seller" | "driver";
@@ -34,25 +23,23 @@ type IncomeUser = {
 type DeliveryRow = {
   id: string;
   seller_id: string;
+
   from_address: string | null;
   to_address: string | null;
   note: string | null;
+
+  pickup_lat?: number | null;
+  pickup_lng?: number | null;
+  dropoff_lat?: number | null;
+  dropoff_lng?: number | null;
+
   status: DeliveryStatus;
   created_at: string;
   price_mnt: number | null;
   delivery_type: string | null;
   chosen_driver_id: string | null;
 
-  seller_marked_paid: boolean;
-  driver_confirmed_payment: boolean;
-
-  closed_at: string | null;
-  dispute_reason: string | null;
-  dispute_opened_at: string | null;
-
   seller_hidden: boolean;
-
-  // UI-only
   bid_count?: number;
 };
 
@@ -61,37 +48,11 @@ function fmtPrice(n: number | null | undefined) {
   return v ? `${v.toLocaleString("mn-MN")}₮` : "Үнэ тохиролцоно";
 }
 
-function fmtDT(iso: string | null | undefined) {
-  if (!iso) return "";
-  try {
-    return new Date(iso).toLocaleString("mn-MN", { hour12: false });
-  } catch {
-    return String(iso);
-  }
-}
-
-function shorten(s: string | null, max = 70) {
+function shorten(s: string | null, max = 72) {
   if (!s) return "—";
   const t = s.trim();
   if (t.length <= max) return t;
   return t.slice(0, max).replace(/\s+$/, "") + "…";
-}
-
-function typeLabel(deliveryType: string | null): { icon: string; label: string } {
-  // ⚠️ UI-г өөрчлөхгүй. Одоохондоо хуучин label-уудыг хэвээр үлдээв.
-  // (#13 дээр “2 төрөл” болгохыг дараагийн алхмаар new-delivery дээр нэг мөр болгоно.)
-  switch (deliveryType) {
-    case "apartment":
-      return { icon: "🏙", label: "Байр" };
-    case "ger":
-      return { icon: "🏠", label: "Гэр хороолол" };
-    case "camp":
-      return { icon: "🏕", label: "Лагер" };
-    case "countryside":
-      return { icon: "🚌", label: "Орон нутаг" };
-    default:
-      return { icon: "📦", label: "Хүргэлт" };
-  }
 }
 
 function badge(status: DeliveryStatus) {
@@ -99,19 +60,11 @@ function badge(status: DeliveryStatus) {
     case "OPEN":
       return { text: "Нээлттэй", cls: "bg-emerald-50 text-emerald-700 border-emerald-100" };
     case "ASSIGNED":
-      return { text: "Жолооч сонгосон", cls: "bg-sky-50 text-sky-700 border-sky-100" };
+      return { text: "Сонгосон", cls: "bg-sky-50 text-sky-700 border-sky-100" };
     case "ON_ROUTE":
       return { text: "Замд", cls: "bg-indigo-50 text-indigo-700 border-indigo-100" };
     case "DELIVERED":
       return { text: "Хүргэсэн", cls: "bg-amber-50 text-amber-700 border-amber-100" };
-    case "PAID":
-      return { text: "Төлсөн", cls: "bg-emerald-50 text-emerald-800 border-emerald-100" };
-    case "DISPUTE":
-      return { text: "Маргаан", cls: "bg-rose-50 text-rose-700 border-rose-100" };
-    case "CLOSED":
-      return { text: "Хаагдсан", cls: "bg-slate-50 text-slate-700 border-slate-200" };
-    case "CANCELLED":
-      return { text: "Цуцалсан", cls: "bg-rose-50 text-rose-700 border-rose-100" };
     default:
       return { text: status, cls: "bg-slate-50 text-slate-700 border-slate-200" };
   }
@@ -121,6 +74,78 @@ function filterByTab(tab: SellerTabId, items: DeliveryRow[]) {
   return items.filter((d) => getSellerTabForStatus(d.status) === tab);
 }
 
+async function copyText(text: string) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function buildGoogleMapsRouteLink(d: DeliveryRow) {
+  const pLat = d.pickup_lat;
+  const pLng = d.pickup_lng;
+  const dLat = d.dropoff_lat;
+  const dLng = d.dropoff_lng;
+
+  if (
+    pLat != null &&
+    pLng != null &&
+    dLat != null &&
+    dLng != null &&
+    Number.isFinite(Number(pLat)) &&
+    Number.isFinite(Number(pLng)) &&
+    Number.isFinite(Number(dLat)) &&
+    Number.isFinite(Number(dLng))
+  ) {
+    const origin = `${pLat},${pLng}`;
+    const dest = `${dLat},${dLng}`;
+    return `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(origin)}&destination=${encodeURIComponent(dest)}`;
+  }
+
+  // координат байхгүй үед fallback
+  const from = d.from_address ? encodeURIComponent(d.from_address) : "";
+  const to = d.to_address ? encodeURIComponent(d.to_address) : "";
+  if (from && to) {
+    return `https://www.google.com/maps/dir/?api=1&origin=${from}&destination=${to}`;
+  }
+  return "https://www.google.com/maps";
+}
+
+function buildSharePost(d: DeliveryRow) {
+  const from = d.from_address || "—";
+  const to = d.to_address || "—";
+  const price = fmtPrice(d.price_mnt);
+  const what = d.note ? d.note.trim() : "";
+  const mapLink = buildGoogleMapsRouteLink(d);
+
+  return (
+    `🚚 Хүргэлт хэрэгтэй байна\n` +
+    `📍 ${from} → ${to}\n` +
+    `💰 ${price}\n` +
+    (what ? `📦 ${what}\n` : "") +
+    `🗺️ ${mapLink}\n` +
+    `#INCOME`
+  );
+}
+
+async function shareFacebookOpenOnly(d: DeliveryRow, setMsg: (s: string | null) => void, setError: (s: string | null) => void) {
+  const text = buildSharePost(d);
+
+  // 1) copy
+  const ok = await copyText(text);
+  if (ok) setMsg("Пост текст хууллаа. Facebook дээр paste хийгээд post хийгээрэй.");
+  else setError("Clipboard зөвшөөрөлгүй байна. (Хуулах боломжгүй)");
+
+  // 2) open FB share dialog (text quote-той)
+  try {
+    const u = encodeURIComponent(buildGoogleMapsRouteLink(d));
+    const quote = encodeURIComponent(text);
+    window.open(`https://www.facebook.com/sharer/sharer.php?u=${u}&quote=${quote}`, "_blank");
+  } catch {}
+}
+
 function Pill({
   label,
   value,
@@ -128,19 +153,17 @@ function Pill({
 }: {
   label: string;
   value: string;
-  accent?: "emerald" | "rose" | "sky" | "slate" | "amber" | "indigo";
+  accent?: "emerald" | "sky" | "indigo" | "amber" | "slate";
 }) {
   const acc =
     accent === "emerald"
       ? "bg-emerald-50 border-emerald-100 text-emerald-800"
-      : accent === "rose"
-      ? "bg-rose-50 border-rose-100 text-rose-800"
       : accent === "sky"
       ? "bg-sky-50 border-sky-100 text-sky-800"
-      : accent === "amber"
-      ? "bg-amber-50 border-amber-100 text-amber-800"
       : accent === "indigo"
       ? "bg-indigo-50 border-indigo-100 text-indigo-800"
+      : accent === "amber"
+      ? "bg-amber-50 border-amber-100 text-amber-800"
       : "bg-slate-50 border-slate-200 text-slate-800";
 
   return (
@@ -165,7 +188,6 @@ export default function SellerDashboardPage() {
 
   const [actLoading, setActLoading] = useState<Record<string, boolean>>({});
 
-  // auth
   useEffect(() => {
     try {
       const raw = window.localStorage.getItem("incomeUser");
@@ -178,7 +200,6 @@ export default function SellerDashboardPage() {
     }
   }, [router]);
 
-  // init tab
   useEffect(() => {
     const urlTab = sp.get("tab");
     const valid = SELLER_TABS.some((t) => t.id === (urlTab as any));
@@ -198,18 +219,9 @@ export default function SellerDashboardPage() {
     router.push(`/seller?tab=${tab}`);
   }
 
-  // fetch
   useEffect(() => {
     if (!user) return;
     void fetchAll(user.id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user?.id]);
-
-  useEffect(() => {
-    if (!user) return;
-    const onFocus = () => void fetchAll(user.id);
-    window.addEventListener("focus", onFocus);
-    return () => window.removeEventListener("focus", onFocus);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id]);
 
@@ -227,16 +239,15 @@ export default function SellerDashboardPage() {
           from_address,
           to_address,
           note,
+          pickup_lat,
+          pickup_lng,
+          dropoff_lat,
+          dropoff_lng,
           status,
           created_at,
           price_mnt,
           delivery_type,
           chosen_driver_id,
-          seller_marked_paid,
-          driver_confirmed_payment,
-          closed_at,
-          dispute_reason,
-          dispute_opened_at,
           seller_hidden
         `
         )
@@ -246,338 +257,305 @@ export default function SellerDashboardPage() {
 
       if (e1) throw e1;
 
-      const base: DeliveryRow[] = (data || []).map((d: any) => ({
-        id: d.id,
-        seller_id: d.seller_id,
-        from_address: d.from_address,
-        to_address: d.to_address,
-        note: d.note,
-        status: d.status,
-        created_at: d.created_at,
-        price_mnt: d.price_mnt,
-        delivery_type: d.delivery_type,
-        chosen_driver_id: d.chosen_driver_id,
-        seller_marked_paid: !!d.seller_marked_paid,
-        driver_confirmed_payment: !!d.driver_confirmed_payment,
-        closed_at: d.closed_at,
-        dispute_reason: d.dispute_reason,
-        dispute_opened_at: d.dispute_opened_at,
-        seller_hidden: !!d.seller_hidden,
-      }));
+      const rows = (data || []) as DeliveryRow[];
 
-      // OPEN дээр bid_count нэмнэ (driver_bids)
-      const openIds = base.filter((x) => x.status === "OPEN").map((x) => x.id);
-
-      let bidMap: Record<string, number> = {};
-      if (openIds.length) {
+      const ids = rows.map((r) => r.id);
+      if (ids.length) {
         const { data: bids, error: e2 } = await supabase
           .from("driver_bids")
           .select("delivery_id")
-          .in("delivery_id", openIds);
+          .in("delivery_id", ids);
 
         if (!e2 && bids) {
-          bidMap = bids.reduce((acc: any, r: any) => {
-            const k = r.delivery_id as string;
-            acc[k] = (acc[k] || 0) + 1;
-            return acc;
-          }, {});
+          const map: Record<string, number> = {};
+          for (const b of bids as any[]) map[b.delivery_id] = (map[b.delivery_id] || 0) + 1;
+          for (const r of rows) r.bid_count = map[r.id] || 0;
         }
       }
 
-      const merged = base.map((d) => ({
-        ...d,
-        bid_count: d.status === "OPEN" ? bidMap[d.id] || 0 : undefined,
-      }));
-
-      setItems(merged);
-      setMsg(null);
+      setItems(rows);
     } catch (e: any) {
-      console.error(e);
-      setError("Өгөгдөл татахад алдаа гарлаа. Дахин оролдоно уу.");
+      setError(e?.message || "Алдаа гарлаа");
     } finally {
       setLoading(false);
     }
   }
 
-  // ✅ Seller: ASSIGNED үед "Жолооч барааг авч явлаа" → ON_ROUTE
-  async function markOnRouteBySeller(deliveryId: string) {
-    if (!user) return;
-    if (actLoading[deliveryId]) return;
-
-    setActLoading((p) => ({ ...p, [deliveryId]: true }));
-    setMsg(null);
-    setError(null);
-
-    try {
-      // ✅ Update + verify (idempotent & guarded)
-      const { data, error: e1 } = await supabase
-        .from("deliveries")
-        .update({ status: "ON_ROUTE" })
-        .eq("id", deliveryId)
-        .eq("seller_id", user.id)
-        .eq("status", "ASSIGNED")
-        .not("chosen_driver_id", "is", null)
-        .select("id,status")
-        .maybeSingle();
-
-      if (e1) throw e1;
-
-      if (!data || (data as any).status !== "ON_ROUTE") {
-        setError("Шилжилт амжилтгүй. (ASSIGNED→ON_ROUTE) Дахин оролдоно уу.");
-        return;
-      }
-
-      // ✅ local state update
-      setItems((prev) =>
-        prev.map((x) => (x.id === deliveryId ? { ...x, status: "ON_ROUTE" as any } : x))
-      );
-
-      // ✅ tab force
-      changeTab("ON_ROUTE");
-      setMsg("Жолооч барааг авч явсан гэж тэмдэглэлээ.");
-
-      // ✅ background refresh
-      void fetchAll(user.id);
-    } catch (e: any) {
-      console.error(e);
-      setError("Шинэчлэхэд алдаа гарлаа. Дахин оролдоно уу.");
-    } finally {
-      setActLoading((p) => ({ ...p, [deliveryId]: false }));
+  const tabCounts = useMemo(() => {
+    const c: Record<SellerTabId, number> = { OPEN: 0, ASSIGNED: 0, ON_ROUTE: 0, DELIVERED: 0 };
+    for (const d of items) {
+      const t = getSellerTabForStatus(d.status);
+      c[t] = (c[t] || 0) + 1;
     }
-  }
-
-  // ✅ Seller: DELIVERED үед л "Төлбөр төлсөн" дарж PAID болгоно
-  async function markPaidQuick(deliveryId: string) {
-    if (!user) return;
-    if (actLoading[deliveryId]) return;
-
-    setActLoading((p) => ({ ...p, [deliveryId]: true }));
-    setMsg(null);
-    setError(null);
-
-    try {
-      const { data, error: e1 } = await supabase
-        .from("deliveries")
-        .update({ seller_marked_paid: true, status: "PAID" })
-        .eq("id", deliveryId)
-        .eq("seller_id", user.id)
-        .eq("status", "DELIVERED")
-        .eq("seller_marked_paid", false)
-        .select("id,status,seller_marked_paid")
-        .maybeSingle();
-
-      if (e1) throw e1;
-
-      // local update
-      if (data) {
-        setItems((prev) =>
-          prev.map((x) =>
-            x.id === deliveryId ? { ...x, status: "PAID" as any, seller_marked_paid: true } : x
-          )
-        );
-      }
-
-      changeTab("PAID");
-      setMsg("Төлбөр төлсөн гэж тэмдэглэлээ.");
-
-      void fetchAll(user.id);
-    } catch (e: any) {
-      console.error(e);
-      setError("Шинэчлэхэд алдаа гарлаа. Дахин оролдоно уу.");
-    } finally {
-      setActLoading((p) => ({ ...p, [deliveryId]: false }));
-    }
-  }
+    return c;
+  }, [items]);
 
   const filtered = useMemo(() => filterByTab(activeTab, items), [activeTab, items]);
 
-  return (
-    <div className="min-h-screen bg-slate-50">
-      <div className="mx-auto max-w-5xl px-4 pb-12 pt-6">
-        {/* Header */}
-        <div className="mb-4 flex items-start justify-between gap-3">
-          <div>
-            <div className="text-xs text-slate-500">Худалдагч</div>
+  function logout() {
+    localStorage.removeItem("incomeUser");
+    router.replace("/");
+  }
+
+  function openDetail(d: DeliveryRow) {
+    router.push(`/seller/delivery/${d.id}?tab=${activeTab}`);
+  }
+
+  function lock(id: string, on: boolean) {
+    setActLoading((p) => ({ ...p, [id]: on }));
+  }
+
+  // ✅ ASSIGNED -> ON_ROUTE (Seller товч)
+  async function markPickedUp(deliveryId: string) {
+    if (!user) return;
+    if (actLoading[deliveryId]) return;
+
+    lock(deliveryId, true);
+    setMsg(null);
+    setError(null);
+
+    try {
+      const now = new Date().toISOString();
+
+      const { error: e1 } = await supabase
+        .from("deliveries")
+        .update({ status: "ON_ROUTE", picked_up_at: now })
+        .eq("id", deliveryId)
+        .eq("seller_id", user.id)
+        .eq("status", "ASSIGNED");
+
+      if (e1) throw e1;
+
+      setMsg("Жолооч барааг авсан → Замд руу шилжлээ.");
+      await fetchAll(user.id);
+    } catch (e: any) {
+      setError(e?.message || "Алдаа гарлаа");
+    } finally {
+      lock(deliveryId, false);
+    }
+  }
+
+  async function deleteDelivered(deliveryId: string) {
+    if (!user) return;
+    if (actLoading[deliveryId]) return;
+
+    lock(deliveryId, true);
+    setMsg(null);
+    setError(null);
+
+    try {
+      const { error: e1 } = await supabase
+        .from("deliveries")
+        .update({ seller_hidden: true })
+        .eq("id", deliveryId)
+        .eq("seller_id", user.id);
+
+      if (e1) throw e1;
+
+      setMsg("Хүргэсэн хүргэлтийг устгалаа.");
+      await fetchAll(user.id);
+    } catch (e: any) {
+      setError(e?.message || "Алдаа гарлаа");
+    } finally {
+      lock(deliveryId, false);
+    }
+  }
+
+  function OpenCardSimple({ d }: { d: DeliveryRow }) {
+    const b = badge(d.status);
+    const isOpenTab = activeTab === "OPEN";
+
+    return (
+      <div className="rounded-2xl border border-slate-200 bg-white p-4">
+        <div className="flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs ${b.cls}`}>
+                {b.text}
+              </span>
+              {typeof d.bid_count === "number" && (
+                <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-xs font-semibold text-slate-700">
+                  Санал: {d.bid_count}
+                </span>
+              )}
+            </div>
+
+            <div className="mt-2 text-sm font-semibold text-slate-900">
+              {shorten(d.from_address, 92)} → {shorten(d.to_address, 92)}
+            </div>
+
+            {d.note ? <div className="mt-1 text-xs text-slate-600">{shorten(d.note, 120)}</div> : null}
           </div>
 
-          <button
-            onClick={() => router.push("/seller/new-delivery")}
-            className="shrink-0 rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-slate-800 active:scale-[0.99]"
-          >
-            ＋ Хүргэлт нэмэх
-          </button>
+          <div className="shrink-0 text-right">
+            <div className="text-sm font-bold text-slate-900">{fmtPrice(d.price_mnt)}</div>
+
+            <div className="mt-2 flex flex-col gap-2">
+              <button
+                onClick={() => openDetail(d)}
+                className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800"
+              >
+                Дэлгэрэнгүй
+              </button>
+
+              {/* ✅ Share зөвхөн Seller OPEN таб дээр */}
+              {isOpenTab && (
+                <button
+                  onClick={() => void shareFacebookOpenOnly(d, setMsg, setError)}
+                  className="rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700"
+                  title="Зөвхөн OPEN таб дээр"
+                >
+                  Facebook-д шэр
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  function DeliveryCardNormal({ d }: { d: DeliveryRow }) {
+    const b = badge(d.status);
+
+    return (
+      <div className="rounded-2xl border border-slate-200 bg-white p-4">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs ${b.cls}`}>
+                {b.text}
+              </span>
+            </div>
+
+            <div className="mt-2 text-sm font-semibold text-slate-900">
+              {shorten(d.from_address, 92)} → {shorten(d.to_address, 92)}
+            </div>
+
+            {d.note ? <div className="mt-1 text-xs text-slate-600">{shorten(d.note, 130)}</div> : null}
+
+            <div className="mt-2 text-sm font-bold text-slate-900">{fmtPrice(d.price_mnt)}</div>
+          </div>
+
+          <div className="flex shrink-0 flex-col gap-2 sm:items-end">
+            <button
+              onClick={() => openDetail(d)}
+              className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-900 hover:border-slate-300"
+            >
+              Дэлгэрэнгүй
+            </button>
+
+            {/* ✅ Алга болсон товчийг буцаав */}
+            {d.status === "ASSIGNED" && (
+              <button
+                onClick={() => void markPickedUp(d.id)}
+                disabled={!!actLoading[d.id]}
+                className={[
+                  "rounded-xl px-4 py-2 text-sm font-semibold text-white",
+                  actLoading[d.id] ? "bg-slate-400" : "bg-indigo-600 hover:bg-indigo-700",
+                ].join(" ")}
+              >
+                Жолооч барааг авч явлаа
+              </button>
+            )}
+
+            {activeTab === "DELIVERED" && (
+              <button
+                onClick={() => void deleteDelivered(d.id)}
+                disabled={!!actLoading[d.id]}
+                className={[
+                  "rounded-xl px-4 py-2 text-sm font-semibold text-white",
+                  actLoading[d.id] ? "bg-slate-400" : "bg-rose-600 hover:bg-rose-700",
+                ].join(" ")}
+              >
+                Устгах
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-slate-50">
+      <div className="mx-auto max-w-6xl px-4 py-6">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <div className="text-xs text-slate-500">INCOME · Seller</div>
+            <div className="text-xl font-bold text-slate-900">{user?.name || "Худалдагч"}</div>
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={() => router.push("/seller/new-delivery")}
+              className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800"
+            >
+              + Шинэ хүргэлт
+            </button>
+            <button
+              onClick={logout}
+              className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100"
+            >
+              Гарах
+            </button>
+          </div>
         </div>
 
-        {/* Tabs */}
-        <div className="mb-5 flex flex-wrap gap-2">
+        {error && (
+          <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+            {error}
+          </div>
+        )}
+        {msg && (
+          <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+            {msg}
+          </div>
+        )}
+
+        <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <Pill label="Нээлттэй" value={String(tabCounts.OPEN)} accent="emerald" />
+          <Pill label="Сонгосон" value={String(tabCounts.ASSIGNED)} accent="sky" />
+          <Pill label="Замд" value={String(tabCounts.ON_ROUTE)} accent="indigo" />
+          <Pill label="Хүргэсэн" value={String(tabCounts.DELIVERED)} accent="amber" />
+        </div>
+
+        <div className="mt-5 flex flex-wrap gap-2">
           {SELLER_TABS.map((t) => {
             const isActive = t.id === activeTab;
+            const count = tabCounts[t.id] || 0;
             return (
               <button
                 key={t.id}
                 onClick={() => changeTab(t.id)}
-                className={`rounded-xl border px-3 py-2 text-sm font-semibold transition ${
+                className={
                   isActive
-                    ? "border-slate-900 bg-white text-slate-900 shadow-sm"
-                    : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"
-                }`}
+                    ? "rounded-full bg-slate-900 text-white px-4 py-2 text-sm font-semibold"
+                    : "rounded-full border border-slate-200 bg-white text-slate-700 px-4 py-2 text-sm font-semibold hover:border-slate-300"
+                }
               >
-                {t.label}
+                {t.label} <span className={isActive ? "opacity-80" : "text-slate-400"}>({count})</span>
               </button>
             );
           })}
         </div>
 
-        {/* Alerts */}
-        {error && (
-          <div className="mb-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">
-            {error}
-          </div>
-        )}
-        {msg && (
-          <div className="mb-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
-            {msg}
-          </div>
-        )}
-
-        {/* Body */}
-        {loading ? (
-          <div className="rounded-2xl border border-slate-200 bg-white p-6 text-slate-600">
-            Ачаалж байна…
-          </div>
-        ) : filtered.length === 0 ? (
-          <div className="rounded-2xl border border-slate-200 bg-white p-6 text-slate-600">
-            Энэ таб дээр одоогоор хүргэлт алга.
-          </div>
-        ) : (
-          <div className="grid gap-4">
-            {filtered.map((d) => {
-              const b = badge(d.status);
-              const t = typeLabel(d.delivery_type);
-
-              const from = shorten(d.from_address, 48);
-              const to = shorten(d.to_address, 48);
-              const what = shorten(d.note, 80);
-
-              const bidCount = d.status === "OPEN" ? Number(d.bid_count || 0) : 0;
-
-              const canPayQuick =
-                activeTab === "DELIVERED" &&
-                canSellerMarkPaid({
-                  status: d.status,
-                  seller_marked_paid: !!d.seller_marked_paid,
-                });
-
-              const canSellerOnRoute =
-                activeTab === "ASSIGNED" &&
-                d.status === "ASSIGNED" &&
-                !!d.chosen_driver_id;
-
-              return (
-                <div
-                  key={d.id}
-                  className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm"
-                >
-                  {/* Top row */}
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div className="flex items-center gap-2">
-                      <span className="text-lg">{t.icon}</span>
-                      <span className="text-sm font-semibold text-slate-900">{t.label}</span>
-                      <span
-                        className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${b.cls}`}
-                      >
-                        {b.text}
-                      </span>
-
-                      {d.status === "OPEN" && (
-                        <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-semibold text-slate-700">
-                          Санал: {bidCount}
-                        </span>
-                      )}
-                    </div>
-
-                    <div className="text-xs text-slate-500">{fmtDT(d.created_at)}</div>
-                  </div>
-
-                  {/* Main tiles */}
-                  <div className="mt-4 grid gap-3 md:grid-cols-3">
-                    <Pill label="Хаанаас" value={from} accent="emerald" />
-                    <Pill label="Хаашаа" value={to} accent="rose" />
-                    <Pill label="Юу хүргэх" value={what} accent="sky" />
-                  </div>
-
-                  {/* Bottom row */}
-                  <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900">
-                        {fmtPrice(d.price_mnt)}
-                      </span>
-
-                      {d.status === "DISPUTE" && d.dispute_opened_at && (
-                        <span className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-800">
-                          Маргаан нээсэн: {fmtDT(d.dispute_opened_at)}
-                        </span>
-                      )}
-
-                      {d.status === "CLOSED" && d.closed_at && (
-                        <span className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700">
-                          Хаагдсан: {fmtDT(d.closed_at)}
-                        </span>
-                      )}
-                    </div>
-
-                    <div className="flex flex-wrap gap-2">
-                      {/* ✅ ASSIGNED дээр Seller: "Жолооч барааг авч явлаа" */}
-                      {canSellerOnRoute && (
-                        <button
-                          onClick={() => markOnRouteBySeller(d.id)}
-                          disabled={!!actLoading[d.id]}
-                          className="rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-60"
-                        >
-                          {actLoading[d.id] ? "Түр хүлээнэ үү…" : "Жолооч барааг авч явлаа"}
-                        </button>
-                      )}
-
-                      {/* ✅ DELIVERED дээр хурдан "Төлбөр төлсөн" */}
-                      {canPayQuick && (
-                        <button
-                          onClick={() => markPaidQuick(d.id)}
-                          disabled={!!actLoading[d.id]}
-                          className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
-                        >
-                          {actLoading[d.id] ? "Түр хүлээнэ үү…" : "Төлбөр төлсөн"}
-                        </button>
-                      )}
-
-                      {/* ✅ Detail */}
-                      <button
-                        onClick={() => router.push(`/seller/delivery/${d.id}?tab=${activeTab}`)}
-                        className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-900 hover:border-slate-300"
-                      >
-                        Дэлгэрэнгүй
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-
-        {/* Footer quick */}
-        <div className="mt-10 flex items-center justify-between gap-3 text-xs text-slate-500">
-          <span>INCOME · Seller</span>
-          <button
-            onClick={() => {
-              try {
-                localStorage.removeItem("incomeUser");
-              } catch {}
-              router.push("/");
-            }}
-            className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:border-slate-300"
-          >
-            Гарах
-          </button>
+        <div className="mt-5">
+          {loading ? (
+            <div className="rounded-2xl border border-slate-200 bg-white p-6 text-slate-600">
+              Ачааллаж байна…
+            </div>
+          ) : filtered.length === 0 ? (
+            <div className="rounded-2xl border border-slate-200 bg-white p-6 text-slate-600">
+              Энэ таб дээр хүргэлт алга.
+            </div>
+          ) : (
+            <div className="grid gap-3">
+              {filtered.map((d) => {
+                if (activeTab === "OPEN") return <OpenCardSimple key={d.id} d={d} />;
+                return <DeliveryCardNormal key={d.id} d={d} />;
+              })}
+            </div>
+          )}
         </div>
       </div>
     </div>

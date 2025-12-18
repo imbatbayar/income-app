@@ -1,14 +1,12 @@
 "use client";
 
 /* ===========================
- * app/driver/delivery/[id]/page.tsx (FINAL v7.2)
+ * app/driver/delivery/[id]/page.tsx (FINAL v7.3)
  *
- * ✅ FIXES:
- * 1) React hooks order crash (privateText useMemo moved ABOVE early returns)
- * 2) Alerts auto-dismiss after 8s (msg/error)
- * 3) Cancel/Decline:
- *    - OPEN: cancel bid (delete driver_bids)
- *    - ASSIGNED + chosen driver: decline => deliveries.status=OPEN, chosen_driver_id=null (and delete own bid if any)
+ * ✅ ADD:
+ * - Сонгогдсон жолооч байвал Худалдагчийн нэр/утас харуулна + tel: залгах
+ * ✅ Privacy unchanged:
+ * - Buyer private info зөвхөн ON_ROUTE+ үед + chosen driver-т
  * =========================== */
 
 import { useEffect, useMemo, useState } from "react";
@@ -70,6 +68,12 @@ type DeliveryPrivate = {
   delivery_id: string;
   to_detail: string | null;
   buyer_phone: string | null;
+};
+
+type SellerLite = {
+  id: string;
+  name: string | null;
+  phone: string | null;
 };
 
 // ---------------- helpers ----------------
@@ -166,6 +170,9 @@ export default function DriverDeliveryDetailPage() {
   const [user, setUser] = useState<IncomeUser | null>(null);
   const [delivery, setDelivery] = useState<DeliveryDetail | null>(null);
 
+  const [seller, setSeller] = useState<SellerLite | null>(null);
+  const [sellerLoading, setSellerLoading] = useState(false);
+
   const [myBid, setMyBid] = useState<BidLite | null>(null);
 
   // ✅ private info state
@@ -220,6 +227,21 @@ export default function DriverDeliveryDetailPage() {
     void fetchAll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, id]);
+
+  async function fetchSeller(sellerId: string) {
+    setSellerLoading(true);
+    try {
+      const { data, error } = await supabase.from("users").select("id,name,phone").eq("id", sellerId).maybeSingle();
+      if (error) {
+        console.warn(error);
+        setSeller(null);
+        return;
+      }
+      setSeller((data as any) || null);
+    } finally {
+      setSellerLoading(false);
+    }
+  }
 
   async function fetchAll() {
     setLoading(true);
@@ -291,6 +313,9 @@ export default function DriverDeliveryDetailPage() {
       };
 
       setDelivery(d);
+
+      // ✅ seller info load (for chosen driver, or just show name/phone if needed)
+      void fetchSeller(d.seller_id);
 
       // my bid
       const { data: b, error: e2 } = await supabase
@@ -448,7 +473,6 @@ export default function DriverDeliveryDetailPage() {
     setMsg(null);
 
     try {
-      // 1) OPEN үед: bid л устгана
       if (delivery.status === "OPEN") {
         if (!myBid) return setError("Та энэ хүргэлтэд хүсэлт гаргаагүй байна.");
 
@@ -465,15 +489,12 @@ export default function DriverDeliveryDetailPage() {
         return;
       }
 
-      // 2) ASSIGNED дээр: сонгогдсон жолооч татгалзвал буцаад OPEN болгоно
       if (delivery.status === "ASSIGNED" && delivery.chosen_driver_id === user.id) {
-        // 2.1 өөрийн bid байвал устгана (байхгүй байж болно)
         if (myBid) {
           await supabase.from("driver_bids").delete().eq("id", myBid.id).eq("driver_id", user.id);
           setMyBid(null);
         }
 
-        // 2.2 deliveries unassign
         const { data, error } = await supabase
           .from("deliveries")
           .update({ status: "OPEN", chosen_driver_id: null })
@@ -488,7 +509,6 @@ export default function DriverDeliveryDetailPage() {
           return;
         }
 
-        // local state
         setDelivery((d) => (d ? { ...d, status: "OPEN", chosen_driver_id: null } : d));
         setPriv(null);
 
@@ -504,7 +524,7 @@ export default function DriverDeliveryDetailPage() {
     }
   }
 
-  // ✅ ON_ROUTE -> DELIVERED (driver)
+  // ✅ ON_ROUTE -> DELIVERED
   async function markDelivered() {
     if (!delivery || !user) return;
     if (!canMarkDelivered) return setError("Энэ хүргэлт танд оноогдоогүй эсвэл төлөв буруу байна.");
@@ -521,8 +541,7 @@ export default function DriverDeliveryDetailPage() {
         .eq("id", delivery.id)
         .eq("status", "ON_ROUTE")
         .eq("chosen_driver_id", user.id)
-        // ✅ VERIFY
-        .select("id,status,seller_marked_paid,driver_confirmed_payment,closed_at,dispute_reason,dispute_opened_at,chosen_driver_id")
+        .select("id,status,chosen_driver_id")
         .maybeSingle();
 
       if (error || !data) {
@@ -531,26 +550,14 @@ export default function DriverDeliveryDetailPage() {
         return;
       }
 
-      const nextStatus = data.status as DeliveryStatus;
-      if (nextStatus !== "DELIVERED") {
+      if ((data.status as DeliveryStatus) !== "DELIVERED") {
         setError("Шинэ төлөв баталгаажсангүй. Дахин оролдоно уу.");
         return;
       }
 
-      const nd: DeliveryDetail = {
-        ...delivery,
-        status: "DELIVERED",
-        seller_marked_paid: !!(data as any).seller_marked_paid,
-        driver_confirmed_payment: !!(data as any).driver_confirmed_payment,
-        closed_at: (data as any).closed_at ?? null,
-        dispute_reason: (data as any).dispute_reason ?? null,
-        dispute_opened_at: (data as any).dispute_opened_at ?? null,
-        chosen_driver_id: (data as any).chosen_driver_id ?? delivery.chosen_driver_id,
-      };
+      const nd: DeliveryDetail = { ...delivery, status: "DELIVERED", chosen_driver_id: (data as any).chosen_driver_id };
 
       setDelivery(nd);
-
-      // ✅ private info still allowed (DELIVERED дээр ч)
       void maybeLoadPrivate(nd);
 
       setMsg("Хүргэсэн гэж тэмдэглэлээ.");
@@ -561,7 +568,7 @@ export default function DriverDeliveryDetailPage() {
     }
   }
 
-  // ✅ PAID -> CLOSED (driver)
+  // ---- legacy functions kept as-is (PAID/DISPUTE/CLOSED) ----
   async function confirmPaymentReceived() {
     if (!delivery || !user) return;
     if (confirmPayLoading) return;
@@ -584,7 +591,6 @@ export default function DriverDeliveryDetailPage() {
         .eq("chosen_driver_id", user.id)
         .eq("status", "PAID")
         .eq("driver_confirmed_payment", false)
-        // ✅ VERIFY
         .select("id,status,driver_confirmed_payment,closed_at,seller_marked_paid,chosen_driver_id")
         .maybeSingle();
 
@@ -594,8 +600,7 @@ export default function DriverDeliveryDetailPage() {
         return;
       }
 
-      const nextStatus = data.status as DeliveryStatus;
-      if (nextStatus !== "CLOSED") {
+      if ((data.status as DeliveryStatus) !== "CLOSED") {
         setError("Хаагдсан төлөв баталгаажсангүй. Дахин оролдоно уу.");
         return;
       }
@@ -610,8 +615,6 @@ export default function DriverDeliveryDetailPage() {
       };
 
       setDelivery(nd);
-
-      // ✅ private info allowed (CLOSED)
       void maybeLoadPrivate(nd);
 
       setMsg("Төлбөр хүлээн авснаа баталлаа.");
@@ -642,7 +645,6 @@ export default function DriverDeliveryDetailPage() {
         .update({ status: "DISPUTE", dispute_reason: reason, dispute_opened_at: openedAt })
         .eq("id", delivery.id)
         .in("status", ["ON_ROUTE", "DELIVERED", "PAID"] as any)
-        // ✅ VERIFY
         .select("id,status,dispute_reason,dispute_opened_at,chosen_driver_id")
         .maybeSingle();
 
@@ -652,8 +654,7 @@ export default function DriverDeliveryDetailPage() {
         return;
       }
 
-      const nextStatus = data.status as DeliveryStatus;
-      if (nextStatus !== "DISPUTE") {
+      if ((data.status as DeliveryStatus) !== "DISPUTE") {
         setError("Маргаан төлөв баталгаажсангүй. Дахин оролдоно уу.");
         return;
       }
@@ -667,8 +668,6 @@ export default function DriverDeliveryDetailPage() {
       };
 
       setDelivery(nd);
-
-      // ✅ private allowed on DISPUTE too
       void maybeLoadPrivate(nd);
 
       setShowDispute(false);
@@ -698,7 +697,6 @@ export default function DriverDeliveryDetailPage() {
         .update({ status: "CLOSED", closed_at: closedAt })
         .eq("id", delivery.id)
         .eq("status", "DISPUTE")
-        // ✅ VERIFY
         .select("id,status,closed_at,chosen_driver_id")
         .maybeSingle();
 
@@ -708,8 +706,7 @@ export default function DriverDeliveryDetailPage() {
         return;
       }
 
-      const nextStatus = data.status as DeliveryStatus;
-      if (nextStatus !== "CLOSED") {
+      if ((data.status as DeliveryStatus) !== "CLOSED") {
         setError("Хаагдсан төлөв баталгаажсангүй. Дахин оролдоно уу.");
         return;
       }
@@ -722,8 +719,6 @@ export default function DriverDeliveryDetailPage() {
       };
 
       setDelivery(nd);
-
-      // ✅ private allowed on CLOSED too
       void maybeLoadPrivate(nd);
 
       setMsg("Маргаан шийдэгдлээ. Хүргэлт хаагдлаа.");
@@ -752,6 +747,16 @@ export default function DriverDeliveryDetailPage() {
 
   const t = typeLabel(delivery?.delivery_type ?? null);
   const b = delivery ? badge(delivery.status) : null;
+
+  const showSellerCard =
+    !!delivery &&
+    isChosenDriver &&
+    (delivery.status === "ASSIGNED" ||
+      delivery.status === "ON_ROUTE" ||
+      delivery.status === "DELIVERED" ||
+      delivery.status === "PAID" ||
+      delivery.status === "DISPUTE" ||
+      delivery.status === "CLOSED");
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -823,21 +828,37 @@ export default function DriverDeliveryDetailPage() {
                   <div className="text-sm text-slate-900 mt-1 whitespace-pre-wrap">{delivery.note}</div>
                 </div>
               )}
-
-              {!isChosenDriver && delivery.status !== "OPEN" && delivery.chosen_driver_id && (
-                <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                  <div className="text-xs text-slate-700">Энэ хүргэлт өөр жолоочид оноогдсон байна.</div>
-                </div>
-              )}
-
-              {delivery.status === "DISPUTE" && (
-                <div className="rounded-xl border border-rose-200 bg-rose-50 p-3">
-                  <div className="text-sm font-semibold text-rose-800">Маргаантай</div>
-                  <div className="text-xs text-rose-700 mt-1 whitespace-pre-wrap">{delivery.dispute_reason || "—"}</div>
-                  <div className="text-[11px] text-rose-600 mt-1">Нээсэн: {fmtDT(delivery.dispute_opened_at)}</div>
-                </div>
-              )}
             </section>
+
+            {/* ✅ Seller card (only when chosen driver) */}
+            {showSellerCard && (
+              <section className="rounded-2xl border border-slate-200 bg-white p-4 space-y-3">
+                <div className="flex items-center justify-between gap-3">
+                  <h2 className="text-sm font-semibold text-slate-900">Худалдагч</h2>
+                  {seller?.phone ? (
+                    <a
+                      href={`tel:${seller.phone}`}
+                      className="rounded-xl bg-slate-900 px-4 py-2 text-xs font-semibold text-white hover:bg-slate-800"
+                    >
+                      Залгах
+                    </a>
+                  ) : null}
+                </div>
+
+                {sellerLoading ? (
+                  <div className="text-xs text-slate-500">Ачаалж байна…</div>
+                ) : (
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 space-y-1">
+                    <div className="text-xs text-slate-700">
+                      Нэр: <span className="font-semibold">{seller?.name || "—"}</span>
+                    </div>
+                    <div className="text-xs text-slate-700">
+                      Утас: <span className="font-semibold">{seller?.phone || "—"}</span>
+                    </div>
+                  </div>
+                )}
+              </section>
+            )}
 
             {/* ✅ private info card (only allowed) */}
             <section className="rounded-2xl border border-slate-200 bg-white p-4 space-y-3">
@@ -919,11 +940,10 @@ export default function DriverDeliveryDetailPage() {
                   </>
                 )}
 
-                {/* ✅ ASSIGNED дээр chosen driver татгалзаж болно */}
                 {delivery.status === "ASSIGNED" && (
                   <>
                     <div className="text-xs text-slate-600 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
-                      Худалдагч “Жолооч барааг авч явлаа” дарсны дараа энэ хүргэлт “Замд” таб руу орно.
+                      Худалдагч “Жолооч барааг авч явлаа” дарсны дараа “Замд” руу шилжинэ.
                     </div>
 
                     {isChosenDriver && (
@@ -980,29 +1000,6 @@ export default function DriverDeliveryDetailPage() {
                   >
                     {resolveLoading ? "Тэмдэглэж байна…" : "Шийдэгдсэн"}
                   </button>
-                )}
-              </div>
-
-              <div className="pt-2 border-t border-slate-200">
-                <div className="text-[11px] text-slate-600">
-                  Худалдагч:{" "}
-                  <span className={delivery.seller_marked_paid ? "text-emerald-700" : "text-slate-600"}>
-                    {delivery.seller_marked_paid ? "Төлсөн" : "Төлөөгүй"}
-                  </span>
-                  {" · "}
-                  Жолооч:{" "}
-                  <span className={delivery.driver_confirmed_payment ? "text-emerald-700" : "text-slate-600"}>
-                    {delivery.driver_confirmed_payment ? "Авсан" : "Батлаагүй"}
-                  </span>
-                </div>
-
-                {delivery.status === "CLOSED" && (
-                  <div className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 p-3">
-                    <div className="text-sm font-semibold text-emerald-800">Хаагдсан</div>
-                    <p className="text-xs text-emerald-700 mt-1">
-                      {delivery.closed_at ? `(${fmtDT(delivery.closed_at)})` : ""} Төлбөрийн тооцоо дууссан.
-                    </p>
-                  </div>
                 )}
               </div>
             </section>

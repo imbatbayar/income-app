@@ -1,8 +1,8 @@
 ﻿BUNDLE__CODE_ONLY
 Root: F:\khurgelt
 Mode: full
-Generated: 2025-12-17 06:55:59
-Files: 19
+Generated: 2025-12-17 09:39:15
+Files: 20
 ================================================================================
 
 # FILE: F:\khurgelt\app\components\Map\DeliveryRouteMap.tsx
@@ -65,6 +65,10 @@ Files: 19
 # ERROR: Method invocation failed because [System.IO.Path] does not contain a method named 'GetRelativePath'.
 
 
+# FILE: F:\khurgelt\lib\ub_admin.ts
+# ERROR: Method invocation failed because [System.IO.Path] does not contain a method named 'GetRelativePath'.
+
+
 # FILE: F:\khurgelt\package.json
 # ERROR: Method invocation failed because [System.IO.Path] does not contain a method named 'GetRelativePath'.
 
@@ -84,4 +88,4 @@ Files: 19
 ================================================================================
 Written: 0
 SkippedBinary: 0
-SkippedErrors: 19
+SkippedErrors: 20
