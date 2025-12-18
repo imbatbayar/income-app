@@ -56,34 +56,60 @@ function shorten(s: string | null, max = 72) {
 }
 
 function areaLine(district?: string | null, khoroo?: string | null) {
-  const dist = String(district || "").trim();
-  const kh = String(khoroo || "").trim();
-  if (!dist && !kh) return "—";
-  if (dist && kh) return `${dist} · ${kh}-р хороо`;
-  return dist || (kh ? `${kh}-р хороо` : "—");
+  const d = (district || "").trim();
+  const k = (khoroo || "").trim();
+
+  if (d && k) return `${d} · ${k}`;
+  if (d) return d;
+  if (k) return k;
+  return "—";
 }
 
 function badge(status: DeliveryStatus) {
   switch (status) {
     case "OPEN":
-      return { text: "Нээлттэй", cls: "bg-emerald-50 text-emerald-700 border-emerald-100" };
+      return {
+        text: "Нээлттэй",
+        cls: "border-emerald-200 bg-emerald-50 text-emerald-700",
+      };
     case "ASSIGNED":
-      return { text: "Сонгосон", cls: "bg-slate-50 text-slate-700 border-slate-200" };
+      return {
+        text: "Сонгосон",
+        cls: "border-indigo-200 bg-indigo-50 text-indigo-700",
+      };
     case "ON_ROUTE":
-      return { text: "Замд", cls: "bg-slate-50 text-slate-700 border-slate-200" };
+      return { text: "Замд", cls: "border-amber-200 bg-amber-50 text-amber-700" };
     case "DELIVERED":
-      return { text: "Хүргэсэн", cls: "bg-emerald-50 text-emerald-800 border-emerald-100" };
     default:
-      return { text: status, cls: "bg-slate-50 text-slate-700 border-slate-200" };
+      return { text: "Хүргэсэн", cls: "border-slate-200 bg-slate-50 text-slate-700" };
   }
 }
 
-function Pill({ label, value }: { label: string; value: string }) {
+function Pill({
+  label,
+  value,
+  active,
+  onClick,
+}: {
+  label: string;
+  value: string;
+  active?: boolean;
+  onClick?: () => void;
+}) {
+  const base = "w-full rounded-xl border px-3 py-2 text-left transition-colors";
+  const cls = active
+    ? "border-emerald-200 bg-emerald-50"
+    : "border-slate-200 bg-white hover:bg-slate-50";
+
+  const Comp: any = onClick ? "button" : "div";
+
   return (
-    <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+    <Comp onClick={onClick} className={`${base} ${cls}`}>
       <div className="text-[11px] text-slate-500">{label}</div>
-      <div className="text-sm font-semibold text-slate-900">{value}</div>
-    </div>
+      <div className="text-sm font-extrabold tracking-tight text-slate-900">
+        {value}
+      </div>
+    </Comp>
   );
 }
 
@@ -213,7 +239,9 @@ export default function SellerDashboardPage() {
       }
 
       setItems(
-        rows.map((r) => (r.status === "OPEN" ? { ...r, bid_count: bidMap[r.id] || 0 } : r))
+        rows.map((r) =>
+          r.status === "OPEN" ? { ...r, bid_count: bidMap[r.id] || 0 } : r
+        )
       );
     } catch (e: any) {
       setError(e?.message || "Алдаа гарлаа");
@@ -222,30 +250,35 @@ export default function SellerDashboardPage() {
     }
   }
 
-  const tabCounts = useMemo(() => {
-    const c: Record<SellerTabId, number> = { OPEN: 0, ASSIGNED: 0, ON_ROUTE: 0, DELIVERED: 0 };
-    for (const d of items) {
-      const t = getSellerTabForStatus(d.status);
-      c[t] = (c[t] || 0) + 1;
-    }
-    return c;
-  }, [items]);
-
   const filtered = useMemo(() => {
     return items.filter((d) => getSellerTabForStatus(d.status) === activeTab);
-  }, [activeTab, items]);
+  }, [items, activeTab]);
+
+  const tabCounts = useMemo(() => {
+    const m: Record<SellerTabId, number> = {
+      OPEN: 0,
+      ASSIGNED: 0,
+      ON_ROUTE: 0,
+      DELIVERED: 0,
+    };
+    for (const d of items) {
+      const tab = getSellerTabForStatus(d.status);
+      m[tab] = (m[tab] || 0) + 1;
+    }
+    return m;
+  }, [items]);
 
   function logout() {
     localStorage.removeItem("incomeUser");
     router.replace("/");
   }
 
-  function openDetail(d: DeliveryRow) {
-    router.push(`/seller/delivery/${d.id}?tab=${activeTab}`);
+  function lock(deliveryId: string, v: boolean) {
+    setActLoading((prev) => ({ ...prev, [deliveryId]: v }));
   }
 
-  function lock(id: string, on: boolean) {
-    setActLoading((p) => ({ ...p, [id]: on }));
+  function openDetail(d: DeliveryRow) {
+    router.push(`/seller/delivery/${d.id}`);
   }
 
   async function markPickedUp(deliveryId: string) {
@@ -320,7 +353,7 @@ export default function SellerDashboardPage() {
     }
   }
 
-  // ✅ OPEN card (price-first, OPEN/SHARE emoji, “Юу хүргэх” pill)
+  // ✅ OPEN card (compact tabs, price pill, OPEN/SHARE below, no “ЮУ ХҮРГЭХ” text)
   function OpenCard({ d }: { d: DeliveryRow }) {
     const b = badge(d.status);
     const fromArea = areaLine(d.pickup_district, d.pickup_khoroo);
@@ -328,12 +361,16 @@ export default function SellerDashboardPage() {
 
     return (
       <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+        {/* Top: status + bids + price */}
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
-              <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs ${b.cls}`}>
+              <span
+                className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs ${b.cls}`}
+              >
                 {b.text}
               </span>
+
               {typeof d.bid_count === "number" && (
                 <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-xs font-semibold text-slate-700">
                   Санал: {d.bid_count}
@@ -341,54 +378,53 @@ export default function SellerDashboardPage() {
               )}
             </div>
 
-            {/* ✅ 1 мөр route: өөр өөр өнгө */}
+            {/* Route */}
             <div className="mt-2 text-sm font-semibold leading-snug">
               <span className="text-emerald-700">{fromArea}</span>
               <span className="mx-2 text-slate-400">→</span>
               <span className="text-emerald-900">{toArea}</span>
             </div>
-
-            {/* ✅ “Юу хүргэх” — pill/button */}
-            <div className="mt-3">
-              <button
-                onClick={() => openDetail(d)}
-                className="inline-flex max-w-full items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-900 hover:bg-emerald-100"
-                title="Юу хүргэх — дэлгэрэнгүй"
-              >
-                <span className="text-emerald-700">📦</span>
-                <span className="text-xs font-bold tracking-wide">ЮУ ХҮРГЭХ</span>
-                <span className="truncate text-emerald-900">
-                  {d.note ? shorten(d.note, 80) : "—"}
-                </span>
-              </button>
-            </div>
           </div>
 
-          {/* ✅ Үнэ хамгийн чухал */}
-          <div className="shrink-0 text-right">
-            <div className="text-[11px] text-slate-500">Үнэ</div>
-            <div className="text-xl font-extrabold tracking-tight text-emerald-700">
+          {/* Price as a clean pill */}
+          <div className="shrink-0">
+            <div className="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-sm font-extrabold tracking-tight text-emerald-700">
               {fmtPrice(d.price_mnt)}
             </div>
-
-            <div className="mt-2 flex items-center justify-end gap-2">
-              <button
-                onClick={() => openDetail(d)}
-                className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-900 hover:border-slate-300"
-                title="OPEN"
-              >
-                📂 OPEN
-              </button>
-
-              <button
-                onClick={() => void shareFacebookOpenOnly(d)}
-                className="rounded-xl bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-700"
-                title="SHARE"
-              >
-                📤 SHARE
-              </button>
-            </div>
           </div>
+        </div>
+
+        {/* What (icon is enough) */}
+        <div className="mt-3">
+          <button
+            onClick={() => openDetail(d)}
+            className="inline-flex w-full items-center gap-2 rounded-2xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-900 hover:bg-emerald-100"
+            title="Дэлгэрэнгүй"
+          >
+            <span className="text-emerald-700">📦</span>
+            <span className="min-w-0 truncate text-emerald-900">
+              {d.note ? shorten(d.note, 90) : "—"}
+            </span>
+          </button>
+        </div>
+
+        {/* Actions BELOW (no overlap) */}
+        <div className="mt-3 flex items-center justify-end gap-2">
+          <button
+            onClick={() => openDetail(d)}
+            className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-900 hover:border-slate-300"
+            title="OPEN"
+          >
+            📂 OPEN
+          </button>
+
+          <button
+            onClick={() => void shareFacebookOpenOnly(d)}
+            className="rounded-xl bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-700"
+            title="SHARE"
+          >
+            📤 SHARE
+          </button>
         </div>
       </div>
     );
@@ -404,7 +440,9 @@ export default function SellerDashboardPage() {
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs ${b.cls}`}>
+              <span
+                className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs ${b.cls}`}
+              >
                 {b.text}
               </span>
             </div>
@@ -415,7 +453,9 @@ export default function SellerDashboardPage() {
               <span className="text-emerald-900">{toArea}</span>
             </div>
 
-            <div className="mt-2 text-sm font-bold text-emerald-700">{fmtPrice(d.price_mnt)}</div>
+            <div className="mt-2 text-sm font-bold text-emerald-700">
+              {fmtPrice(d.price_mnt)}
+            </div>
           </div>
 
           <div className="flex shrink-0 flex-col gap-2 sm:items-end">
@@ -432,20 +472,24 @@ export default function SellerDashboardPage() {
                 disabled={!!actLoading[d.id]}
                 className={[
                   "rounded-xl px-4 py-2 text-sm font-semibold text-white",
-                  actLoading[d.id] ? "bg-slate-400" : "bg-emerald-600 hover:bg-emerald-700",
+                  actLoading[d.id]
+                    ? "bg-emerald-400"
+                    : "bg-emerald-600 hover:bg-emerald-700",
                 ].join(" ")}
               >
                 Жолооч барааг авч явлаа
               </button>
             )}
 
-            {activeTab === "DELIVERED" && (
+            {d.status === "DELIVERED" && (
               <button
                 onClick={() => void deleteDelivered(d.id)}
                 disabled={!!actLoading[d.id]}
                 className={[
                   "rounded-xl px-4 py-2 text-sm font-semibold text-white",
-                  actLoading[d.id] ? "bg-slate-400" : "bg-slate-900 hover:bg-slate-800",
+                  actLoading[d.id]
+                    ? "bg-slate-400"
+                    : "bg-slate-900 hover:bg-slate-800",
                 ].join(" ")}
               >
                 Устгах
@@ -459,82 +503,100 @@ export default function SellerDashboardPage() {
 
   return (
     <div className="min-h-screen bg-slate-50">
-      <div className="mx-auto max-w-6xl px-4 py-6">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <div className="text-xs text-slate-500">INCOME · Seller</div>
-            <div className="text-xl font-bold text-slate-900">{user?.name || "Худалдагч"}</div>
-          </div>
-          <div className="flex gap-2">
-            <button
-              onClick={() => router.push("/seller/new-delivery")}
-              className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700"
-            >
-              + Шинэ хүргэлт
-            </button>
-            <button
-              onClick={logout}
-              className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:border-slate-300"
-            >
-              Гарах
-            </button>
-          </div>
-        </div>
+      <header className="border-b border-slate-200 bg-white">
+        <div className="max-w-3xl mx-auto px-4 py-4">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="text-xs font-semibold text-slate-500">
+                INCOME · Seller
+              </div>
+              <div className="text-2xl font-extrabold tracking-tight text-slate-900">
+                {user?.name || "—"}
+              </div>
+            </div>
 
-        {error && (
-          <div className="mt-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-            {error}
-          </div>
-        )}
-        {msg && (
-          <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
-            {msg}
-          </div>
-        )}
-
-        <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
-          <Pill label="Нээлттэй" value={String(tabCounts.OPEN)} />
-          <Pill label="Сонгосон" value={String(tabCounts.ASSIGNED)} />
-          <Pill label="Замд" value={String(tabCounts.ON_ROUTE)} />
-          <Pill label="Хүргэсэн" value={String(tabCounts.DELIVERED)} />
-        </div>
-
-        <div className="mt-5 flex flex-wrap gap-2">
-          {SELLER_TABS.map((t) => {
-            const isActive = t.id === activeTab;
-            const count = tabCounts[t.id] || 0;
-            return (
+            <div className="flex items-center gap-2">
               <button
-                key={t.id}
-                onClick={() => changeTab(t.id)}
-                className={
-                  isActive
-                    ? "rounded-full bg-emerald-600 text-white px-4 py-2 text-sm font-semibold hover:bg-emerald-700"
-                    : "rounded-full border border-slate-200 bg-white text-slate-700 px-4 py-2 text-sm font-semibold hover:border-slate-300"
-                }
+                onClick={() => router.push("/seller/new-delivery")}
+                className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700"
               >
-                {t.label}{" "}
-                <span className={isActive ? "opacity-80" : "text-slate-400"}>({count})</span>
+                + Шинэ хүргэлт
               </button>
-            );
-          })}
-        </div>
 
-        <div className="mt-5">
-          {loading ? (
-            <div className="rounded-2xl border border-slate-200 bg-white p-6 text-slate-600">Ачаалж байна…</div>
-          ) : filtered.length === 0 ? (
-            <div className="rounded-2xl border border-slate-200 bg-white p-6 text-slate-600">Энэ таб дээр хүргэлт алга.</div>
-          ) : (
-            <div className="grid gap-3">
-              {filtered.map((d) => {
-                if (activeTab === "OPEN") return <OpenCard key={d.id} d={d} />;
-                return <DeliveryCardNormal key={d.id} d={d} />;
-              })}
+              <button
+                onClick={logout}
+                className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:border-slate-300"
+              >
+                Гарах
+              </button>
+            </div>
+          </div>
+
+          {error && (
+            <div className="mt-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+              {error}
             </div>
           )}
+          {msg && (
+            <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+              {msg}
+            </div>
+          )}
+
+          {/* ✅ Top 4 controls: SHORT + clickable, remove the duplicate half-round buttons */}
+          <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <Pill
+              label="Нээлттэй"
+              value={String(tabCounts.OPEN)}
+              active={activeTab === "OPEN"}
+              onClick={() => changeTab("OPEN")}
+            />
+            <Pill
+              label="Сонгосон"
+              value={String(tabCounts.ASSIGNED)}
+              active={activeTab === "ASSIGNED"}
+              onClick={() => changeTab("ASSIGNED")}
+            />
+            <Pill
+              label="Замд"
+              value={String(tabCounts.ON_ROUTE)}
+              active={activeTab === "ON_ROUTE"}
+              onClick={() => changeTab("ON_ROUTE")}
+            />
+            <Pill
+              label="Хүргэсэн"
+              value={String(tabCounts.DELIVERED)}
+              active={activeTab === "DELIVERED"}
+              onClick={() => changeTab("DELIVERED")}
+            />
+          </div>
+
+          <div className="mt-3 text-xs text-slate-500">
+            Одоо: <span className="font-semibold text-slate-700">
+              {SELLER_TABS.find((t) => t.id === activeTab)?.label || "—"}
+            </span>
+          </div>
         </div>
-      </div>
+      </header>
+
+      <main className="max-w-3xl mx-auto px-4 py-6">
+        {loading ? (
+          <div className="rounded-2xl border border-slate-200 bg-white p-6 text-slate-600">
+            Ачаалж байна…
+          </div>
+        ) : filtered.length === 0 ? (
+          <div className="rounded-2xl border border-slate-200 bg-white p-6 text-slate-600">
+            Энэ таб дээр хүргэлт алга.
+          </div>
+        ) : (
+          <div className="grid gap-3">
+            {filtered.map((d) => {
+              if (activeTab === "OPEN") return <OpenCard key={d.id} d={d} />;
+              return <DeliveryCardNormal key={d.id} d={d} />;
+            })}
+          </div>
+        )}
+      </main>
     </div>
   );
 }

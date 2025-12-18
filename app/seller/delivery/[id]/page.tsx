@@ -20,9 +20,16 @@ type DeliveryDetail = {
   id: string;
   seller_id: string;
 
+  // full address (kept for share/edit, but NOT shown in top line now)
   from_address: string | null;
   to_address: string | null;
   note: string | null;
+
+  // ✅ district/khoroo (used for top line)
+  pickup_district: string | null;
+  pickup_khoroo: string | null;
+  dropoff_district: string | null;
+  dropoff_khoroo: string | null;
 
   pickup_lat: number | null;
   pickup_lng: number | null;
@@ -75,18 +82,42 @@ function shorten(s: string | null, max = 90) {
   return t.slice(0, max).replace(/\s+$/, "") + "…";
 }
 
+function areaLine(district?: string | null, khoroo?: string | null) {
+  const d = (district || "").trim();
+  const k = (khoroo || "").trim();
+  if (d && k) return `${d} · ${k}`;
+  if (d) return d;
+  if (k) return k;
+  return "—";
+}
+
 function badge(status: DeliveryStatus) {
   switch (status) {
     case "OPEN":
-      return { text: "Нээлттэй", cls: "bg-emerald-50 text-emerald-700 border-emerald-100" };
+      return {
+        text: "Нээлттэй",
+        cls: "bg-emerald-50 text-emerald-700 border-emerald-100",
+      };
     case "ASSIGNED":
-      return { text: "Жолооч сонгосон", cls: "bg-sky-50 text-sky-700 border-sky-100" };
+      return {
+        text: "Жолооч сонгосон",
+        cls: "bg-sky-50 text-sky-700 border-sky-100",
+      };
     case "ON_ROUTE":
-      return { text: "Замд", cls: "bg-indigo-50 text-indigo-700 border-indigo-100" };
+      return {
+        text: "Замд",
+        cls: "bg-indigo-50 text-indigo-700 border-indigo-100",
+      };
     case "DELIVERED":
-      return { text: "Хүргэсэн", cls: "bg-amber-50 text-amber-700 border-amber-100" };
+      return {
+        text: "Хүргэсэн",
+        cls: "bg-amber-50 text-amber-700 border-amber-100",
+      };
     case "CANCELLED":
-      return { text: "Цуцалсан", cls: "bg-rose-50 text-rose-700 border-rose-100" };
+      return {
+        text: "Цуцалсан",
+        cls: "bg-rose-50 text-rose-700 border-rose-100",
+      };
     default:
       return { text: status, cls: "bg-slate-50 text-slate-700 border-slate-200" };
   }
@@ -172,6 +203,12 @@ export default function SellerDeliveryDetailPage() {
           from_address,
           to_address,
           note,
+
+          pickup_district,
+          pickup_khoroo,
+          dropoff_district,
+          dropoff_khoroo,
+
           pickup_lat,
           pickup_lng,
           dropoff_lat,
@@ -208,24 +245,34 @@ export default function SellerDeliveryDetailPage() {
       const d: DeliveryDetail = {
         id: (data as any).id,
         seller_id: (data as any).seller_id,
+
         from_address: (data as any).from_address ?? null,
         to_address: (data as any).to_address ?? null,
         note: (data as any).note ?? null,
+
+        pickup_district: (data as any).pickup_district ?? null,
+        pickup_khoroo: (data as any).pickup_khoroo ?? null,
+        dropoff_district: (data as any).dropoff_district ?? null,
+        dropoff_khoroo: (data as any).dropoff_khoroo ?? null,
+
         pickup_lat: (data as any).pickup_lat ?? null,
         pickup_lng: (data as any).pickup_lng ?? null,
         dropoff_lat: (data as any).dropoff_lat ?? null,
         dropoff_lng: (data as any).dropoff_lng ?? null,
+
         status: (data as any).status as DeliveryStatus,
         created_at: (data as any).created_at,
         price_mnt: (data as any).price_mnt ?? null,
         delivery_type: (data as any).delivery_type ?? null,
         chosen_driver_id: (data as any).chosen_driver_id ?? null,
+
         pickup_contact_phone: (data as any).pickup_contact_phone ?? null,
         dropoff_contact_phone: (data as any).dropoff_contact_phone ?? null,
       };
 
       setDelivery(d);
 
+      // Edit uses full address (kept)
       setEditFrom(d.from_address || "");
       setEditTo(d.to_address || "");
       setEditNote(d.note || "");
@@ -325,7 +372,11 @@ export default function SellerDeliveryDetailPage() {
         return;
       }
 
-      setDelivery({ ...delivery, status: "ASSIGNED", chosen_driver_id: (data as any).chosen_driver_id });
+      setDelivery({
+        ...delivery,
+        status: "ASSIGNED",
+        chosen_driver_id: (data as any).chosen_driver_id,
+      });
 
       const target = bids.find((b) => b.driver_id === driverId)?.driver || null;
       setChosenDriver(target);
@@ -455,15 +506,12 @@ export default function SellerDeliveryDetailPage() {
 
     const text = buildShareText(delivery);
 
-    // ✅ 1) эхлээд copy
     const ok = await copyText(text);
-    if (ok) setMsg("Пост текст хууллаа. Facebook руу орж paste хийгээрэй.");
+    if (ok) setMsg("📤 Пост текст хууллаа. Facebook дээр paste хийгээрэй.");
     else setError("Clipboard зөвшөөрөлгүй байна. (Хуулах боломжгүй)");
 
-    // ✅ 2) FB open (page/group-д шууд post хийхийг FB web зөвшөөрдөггүй)
-    // share dialog руу оруулна — хэрэглэгч paste хийнэ.
     try {
-      const u = encodeURIComponent("https://facebook.com");
+      const u = encodeURIComponent("https://income.mn");
       const quote = encodeURIComponent(text);
       window.open(`https://www.facebook.com/sharer/sharer.php?u=${u}&quote=${quote}`, "_blank");
     } catch {}
@@ -472,10 +520,10 @@ export default function SellerDeliveryDetailPage() {
   if (loading) {
     return (
       <div className="min-h-screen bg-slate-50">
-        <div className="max-w-3xl mx-auto px-4 py-6 space-y-4">
-          <div className="h-10 w-32 bg-slate-200 rounded-xl animate-pulse" />
-          <div className="h-28 bg-white border border-slate-200 rounded-2xl animate-pulse" />
-          <div className="h-44 bg-white border border-slate-200 rounded-2xl animate-pulse" />
+        <div className="mx-auto max-w-3xl space-y-4 px-4 py-6">
+          <div className="h-10 w-28 animate-pulse rounded-xl bg-slate-200" />
+          <div className="h-28 animate-pulse rounded-2xl border border-slate-200 bg-white" />
+          <div className="h-44 animate-pulse rounded-2xl border border-slate-200 bg-white" />
         </div>
       </div>
     );
@@ -485,9 +533,13 @@ export default function SellerDeliveryDetailPage() {
 
   const b = delivery ? badge(delivery.status) : null;
 
+  // ✅ top route uses district/khoroo ONLY
+  const topFrom = delivery ? areaLine(delivery.pickup_district, delivery.pickup_khoroo) : "—";
+  const topTo = delivery ? areaLine(delivery.dropoff_district, delivery.dropoff_khoroo) : "—";
+
   return (
     <div className="min-h-screen bg-slate-50">
-      <main className="max-w-3xl mx-auto px-4 py-6 space-y-4">
+      <main className="mx-auto max-w-3xl space-y-4 px-4 py-6">
         <div className="flex items-center justify-between gap-3">
           <button
             onClick={goBack}
@@ -514,29 +566,61 @@ export default function SellerDeliveryDetailPage() {
           </div>
         ) : (
           <>
-            <div className="rounded-2xl border border-slate-200 bg-white p-4">
+            {/* TOP CARD */}
+            <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs ${b?.cls || ""}`}>
+                  <div className="flex flex-wrap items-center gap-2">
+                    {/* ✅ Price badge: same size as status badge, placed before it */}
+                    <span className="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-xs font-extrabold tracking-tight text-emerald-700">
+                      {fmtPrice(delivery.price_mnt)}
+                    </span>
+
+                    <span
+                      className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs ${
+                        b?.cls || ""
+                      }`}
+                    >
                       {b?.text || delivery.status}
                     </span>
+
                     <span className="text-xs text-slate-500">{fmtDT(delivery.created_at)}</span>
                   </div>
 
-                  <div className="mt-2 text-sm font-semibold text-slate-900">
-                    {shorten(delivery.from_address, 120)} → {shorten(delivery.to_address, 120)}
+                  {/* ✅ Only district/khoroo route */}
+                  <div className="mt-2 text-sm font-semibold leading-snug text-slate-900">
+                    {topFrom} <span className="mx-1 text-slate-400">→</span> {topTo}
                   </div>
 
-                  {delivery.note && <div className="mt-1 text-xs text-slate-600">{shorten(delivery.note, 160)}</div>}
+                  {/* NOTE as a clean pill */}
+                  {delivery.note && (
+                    <div className="mt-3">
+                      <div className="inline-flex w-full items-center gap-2 rounded-2xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-900">
+                        <span className="text-emerald-700">📦</span>
+                        <span className="min-w-0 truncate">{shorten(delivery.note, 140)}</span>
+                      </div>
+                    </div>
+                  )}
 
-                  <div className="mt-3 inline-flex items-center rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-900">
-                    {fmtPrice(delivery.price_mnt)}
+                  {/* INFO / WARNING */}
+                  <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2">
+                    <div className="text-xs leading-relaxed text-slate-700">
+                      <span className="font-semibold">ℹ️ Анхаар:</span>{" "}
+                      Одоогоор энэ хэсэгт <span className="font-semibold">дүүрэг/хороо</span> л
+                      харагдана.
+                      <br />
+                      Жолооч <span className="font-semibold">сонгогдвол</span> таны (худалдагчийн){" "}
+                      <span className="font-semibold">хаяг, утас</span> жолоочид ил болно.
+                      <br />
+                      Жолооч <span className="font-semibold">барааг аваад “Замд”</span> орсон үед{" "}
+                      <span className="font-semibold">хүлээн авагчийн</span> (хүргэх){" "}
+                      <span className="font-semibold">дэлгэрэнгүй хаяг, утас</span> мөн ил болно.
+                    </div>
                   </div>
                 </div>
               </div>
 
-              {/* ✅ OPEN controls: Засах + Facebook share (Засах-ын хажууд) */}
+              {/* ACTIONS — below (no overlap) */}
               {canEditOrCancel && (
                 <div className="mt-4 flex flex-wrap gap-2">
                   <button
@@ -549,9 +633,9 @@ export default function SellerDeliveryDetailPage() {
                   <button
                     onClick={() => void shareFacebookOnly()}
                     className="rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700"
-                    title="Зөвхөн Facebook-д (Copy + FB open)"
+                    title="Copy + Facebook open"
                   >
-                    Facebook-д шэр
+                    📤 Facebook-д шэр
                   </button>
 
                   <button
@@ -564,6 +648,7 @@ export default function SellerDeliveryDetailPage() {
                 </div>
               )}
 
+              {/* EDIT PANEL */}
               {canEditOrCancel && editOpen && (
                 <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
                   <div className="grid grid-cols-1 gap-3">
@@ -586,7 +671,7 @@ export default function SellerDeliveryDetailPage() {
                     </div>
 
                     <div>
-                      <label className="text-xs font-semibold text-slate-700">Тайлбар (юу хүргэх)</label>
+                      <label className="text-xs font-semibold text-slate-700">Тайлбар</label>
                       <textarea
                         value={editNote}
                         onChange={(e) => setEditNote(e.target.value)}
@@ -626,31 +711,41 @@ export default function SellerDeliveryDetailPage() {
             </div>
 
             {/* MAP */}
-            <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden">
-              <div className="px-4 py-3 border-b border-slate-200">
+            <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+              <div className="border-b border-slate-200 px-4 py-3">
                 <div className="text-sm font-semibold text-slate-900">Газрын зураг</div>
-                <div className="text-xs text-slate-500 mt-0.5">Авах (цэнхэр) · Хүргэх (ногоон)</div>
+                <div className="mt-0.5 text-xs text-slate-500">
+                  Авах (цэнхэр) · Хүргэх (ногоон)
+                </div>
               </div>
               <DeliveryRouteMap pickup={pickup} dropoff={dropoff} height={240} />
             </div>
 
-            {/* chosen driver info */}
+            {/* CHOSEN DRIVER */}
             {delivery.chosen_driver_id && (
-              <div className="rounded-2xl border border-slate-200 bg-white p-4">
+              <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
                 <div className="text-sm font-semibold text-slate-900">Сонгосон жолооч</div>
 
                 <div className="mt-3 flex items-center gap-3">
-                  <div className="h-10 w-10 rounded-full bg-slate-100 overflow-hidden shrink-0">
+                  <div className="h-10 w-10 shrink-0 overflow-hidden rounded-full bg-slate-100">
                     {chosenDriver?.avatar_url ? (
                       // eslint-disable-next-line @next/next/no-img-element
-                      <img src={chosenDriver.avatar_url} alt="" className="h-full w-full object-cover" />
+                      <img
+                        src={chosenDriver.avatar_url}
+                        alt=""
+                        className="h-full w-full object-cover"
+                      />
                     ) : (
-                      <div className="h-full w-full flex items-center justify-center text-xs text-slate-500">—</div>
+                      <div className="flex h-full w-full items-center justify-center text-xs text-slate-500">
+                        —
+                      </div>
                     )}
                   </div>
 
                   <div className="min-w-0">
-                    <div className="text-sm font-semibold text-slate-900">{chosenDriver?.name || "Жолооч"}</div>
+                    <div className="text-sm font-semibold text-slate-900">
+                      {chosenDriver?.name || "Жолооч"}
+                    </div>
                     <div className="text-xs text-slate-600">{chosenDriver?.phone || "—"}</div>
                   </div>
 
@@ -668,25 +763,31 @@ export default function SellerDeliveryDetailPage() {
               </div>
             )}
 
-            {/* bids (OPEN only) */}
+            {/* BIDS (OPEN only) */}
             {delivery.status === "OPEN" && (
-              <div className="rounded-2xl border border-slate-200 bg-white p-4">
+              <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
                 <div className="flex items-center justify-between gap-2">
                   <div className="text-sm font-semibold text-slate-900">Жолоочийн хүсэлтүүд</div>
-                  <div className="text-xs text-slate-500">{loadingBids ? "Ачаалж байна…" : `${bids.length} хүсэлт`}</div>
+                  <div className="text-xs text-slate-500">
+                    {loadingBids ? "Ачаалж байна…" : `${bids.length} хүсэлт`}
+                  </div>
                 </div>
 
                 {loadingBids ? (
                   <div className="mt-3 text-sm text-slate-600">Ачаалж байна…</div>
                 ) : bids.length === 0 ? (
-                  <div className="mt-3 text-sm text-slate-600">Одоогоор хүсэлт ирээгүй байна.</div>
+                  <div className="mt-3 text-sm text-slate-600">
+                    Одоогоор хүсэлт ирээгүй байна.
+                  </div>
                 ) : (
                   <div className="mt-3 space-y-2">
                     {bids.map((bid) => (
                       <div key={bid.id} className="rounded-2xl border border-slate-200 p-3">
                         <div className="flex items-center gap-3">
                           <div className="min-w-0">
-                            <div className="text-sm font-semibold text-slate-900">{bid.driver?.name || "Жолооч"}</div>
+                            <div className="text-sm font-semibold text-slate-900">
+                              {bid.driver?.name || "Жолооч"}
+                            </div>
                             <div className="text-xs text-slate-600">{bid.driver?.phone || "—"}</div>
                           </div>
 
