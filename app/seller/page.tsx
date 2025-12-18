@@ -28,10 +28,10 @@ type DeliveryRow = {
   to_address: string | null;
   note: string | null;
 
-  pickup_lat?: number | null;
-  pickup_lng?: number | null;
-  dropoff_lat?: number | null;
-  dropoff_lng?: number | null;
+  pickup_district: string | null;
+  pickup_khoroo: string | null;
+  dropoff_district: string | null;
+  dropoff_khoroo: string | null;
 
   status: DeliveryStatus;
   created_at: string;
@@ -55,23 +55,36 @@ function shorten(s: string | null, max = 72) {
   return t.slice(0, max).replace(/\s+$/, "") + "…";
 }
 
+function areaLine(district?: string | null, khoroo?: string | null) {
+  const dist = String(district || "").trim();
+  const kh = String(khoroo || "").trim();
+  if (!dist && !kh) return "—";
+  if (dist && kh) return `${dist} · ${kh}-р хороо`;
+  return dist || (kh ? `${kh}-р хороо` : "—");
+}
+
 function badge(status: DeliveryStatus) {
   switch (status) {
     case "OPEN":
       return { text: "Нээлттэй", cls: "bg-emerald-50 text-emerald-700 border-emerald-100" };
     case "ASSIGNED":
-      return { text: "Сонгосон", cls: "bg-sky-50 text-sky-700 border-sky-100" };
+      return { text: "Сонгосон", cls: "bg-slate-50 text-slate-700 border-slate-200" };
     case "ON_ROUTE":
-      return { text: "Замд", cls: "bg-indigo-50 text-indigo-700 border-indigo-100" };
+      return { text: "Замд", cls: "bg-slate-50 text-slate-700 border-slate-200" };
     case "DELIVERED":
-      return { text: "Хүргэсэн", cls: "bg-amber-50 text-amber-700 border-amber-100" };
+      return { text: "Хүргэсэн", cls: "bg-emerald-50 text-emerald-800 border-emerald-100" };
     default:
       return { text: status, cls: "bg-slate-50 text-slate-700 border-slate-200" };
   }
 }
 
-function filterByTab(tab: SellerTabId, items: DeliveryRow[]) {
-  return items.filter((d) => getSellerTabForStatus(d.status) === tab);
+function Pill({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+      <div className="text-[11px] text-slate-500">{label}</div>
+      <div className="text-sm font-semibold text-slate-900">{value}</div>
+    </div>
+  );
 }
 
 async function copyText(text: string) {
@@ -83,94 +96,17 @@ async function copyText(text: string) {
   }
 }
 
-function buildGoogleMapsRouteLink(d: DeliveryRow) {
-  const pLat = d.pickup_lat;
-  const pLng = d.pickup_lng;
-  const dLat = d.dropoff_lat;
-  const dLng = d.dropoff_lng;
-
-  if (
-    pLat != null &&
-    pLng != null &&
-    dLat != null &&
-    dLng != null &&
-    Number.isFinite(Number(pLat)) &&
-    Number.isFinite(Number(pLng)) &&
-    Number.isFinite(Number(dLat)) &&
-    Number.isFinite(Number(dLng))
-  ) {
-    const origin = `${pLat},${pLng}`;
-    const dest = `${dLat},${dLng}`;
-    return `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(origin)}&destination=${encodeURIComponent(dest)}`;
-  }
-
-  // координат байхгүй үед fallback
-  const from = d.from_address ? encodeURIComponent(d.from_address) : "";
-  const to = d.to_address ? encodeURIComponent(d.to_address) : "";
-  if (from && to) {
-    return `https://www.google.com/maps/dir/?api=1&origin=${from}&destination=${to}`;
-  }
-  return "https://www.google.com/maps";
-}
-
-function buildSharePost(d: DeliveryRow) {
-  const from = d.from_address || "—";
-  const to = d.to_address || "—";
+function buildSharePostSimple(d: DeliveryRow) {
+  const fromArea = areaLine(d.pickup_district, d.pickup_khoroo);
+  const toArea = areaLine(d.dropoff_district, d.dropoff_khoroo);
   const price = fmtPrice(d.price_mnt);
   const what = d.note ? d.note.trim() : "";
-  const mapLink = buildGoogleMapsRouteLink(d);
-
   return (
-    `🚚 Хүргэлт хэрэгтэй байна\n` +
-    `📍 ${from} → ${to}\n` +
+    `🚚 Delivery\n` +
+    `📍 ${fromArea} → ${toArea}\n` +
     `💰 ${price}\n` +
     (what ? `📦 ${what}\n` : "") +
-    `🗺️ ${mapLink}\n` +
     `#INCOME`
-  );
-}
-
-async function shareFacebookOpenOnly(d: DeliveryRow, setMsg: (s: string | null) => void, setError: (s: string | null) => void) {
-  const text = buildSharePost(d);
-
-  // 1) copy
-  const ok = await copyText(text);
-  if (ok) setMsg("Пост текст хууллаа. Facebook дээр paste хийгээд post хийгээрэй.");
-  else setError("Clipboard зөвшөөрөлгүй байна. (Хуулах боломжгүй)");
-
-  // 2) open FB share dialog (text quote-той)
-  try {
-    const u = encodeURIComponent(buildGoogleMapsRouteLink(d));
-    const quote = encodeURIComponent(text);
-    window.open(`https://www.facebook.com/sharer/sharer.php?u=${u}&quote=${quote}`, "_blank");
-  } catch {}
-}
-
-function Pill({
-  label,
-  value,
-  accent = "slate",
-}: {
-  label: string;
-  value: string;
-  accent?: "emerald" | "sky" | "indigo" | "amber" | "slate";
-}) {
-  const acc =
-    accent === "emerald"
-      ? "bg-emerald-50 border-emerald-100 text-emerald-800"
-      : accent === "sky"
-      ? "bg-sky-50 border-sky-100 text-sky-800"
-      : accent === "indigo"
-      ? "bg-indigo-50 border-indigo-100 text-indigo-800"
-      : accent === "amber"
-      ? "bg-amber-50 border-amber-100 text-amber-800"
-      : "bg-slate-50 border-slate-200 text-slate-800";
-
-  return (
-    <div className={`rounded-xl border px-3 py-2 ${acc}`}>
-      <div className="text-[11px] opacity-70">{label}</div>
-      <div className="text-sm font-semibold leading-snug">{value}</div>
-    </div>
   );
 }
 
@@ -239,10 +175,10 @@ export default function SellerDashboardPage() {
           from_address,
           to_address,
           note,
-          pickup_lat,
-          pickup_lng,
-          dropoff_lat,
-          dropoff_lng,
+          pickup_district,
+          pickup_khoroo,
+          dropoff_district,
+          dropoff_khoroo,
           status,
           created_at,
           price_mnt,
@@ -259,21 +195,26 @@ export default function SellerDashboardPage() {
 
       const rows = (data || []) as DeliveryRow[];
 
-      const ids = rows.map((r) => r.id);
-      if (ids.length) {
-        const { data: bids, error: e2 } = await supabase
+      const openIds = rows.filter((r) => r.status === "OPEN").map((r) => r.id);
+      const bidMap: Record<string, number> = {};
+
+      if (openIds.length) {
+        const { data: bidRows, error: e2 } = await supabase
           .from("driver_bids")
           .select("delivery_id")
-          .in("delivery_id", ids);
+          .in("delivery_id", openIds);
 
-        if (!e2 && bids) {
-          const map: Record<string, number> = {};
-          for (const b of bids as any[]) map[b.delivery_id] = (map[b.delivery_id] || 0) + 1;
-          for (const r of rows) r.bid_count = map[r.id] || 0;
+        if (!e2) {
+          for (const r of bidRows || []) {
+            const k = (r as any).delivery_id as string;
+            bidMap[k] = (bidMap[k] || 0) + 1;
+          }
         }
       }
 
-      setItems(rows);
+      setItems(
+        rows.map((r) => (r.status === "OPEN" ? { ...r, bid_count: bidMap[r.id] || 0 } : r))
+      );
     } catch (e: any) {
       setError(e?.message || "Алдаа гарлаа");
     } finally {
@@ -290,7 +231,9 @@ export default function SellerDashboardPage() {
     return c;
   }, [items]);
 
-  const filtered = useMemo(() => filterByTab(activeTab, items), [activeTab, items]);
+  const filtered = useMemo(() => {
+    return items.filter((d) => getSellerTabForStatus(d.status) === activeTab);
+  }, [activeTab, items]);
 
   function logout() {
     localStorage.removeItem("incomeUser");
@@ -305,7 +248,6 @@ export default function SellerDashboardPage() {
     setActLoading((p) => ({ ...p, [id]: on }));
   }
 
-  // ✅ ASSIGNED -> ON_ROUTE (Seller товч)
   async function markPickedUp(deliveryId: string) {
     if (!user) return;
     if (actLoading[deliveryId]) return;
@@ -361,15 +303,34 @@ export default function SellerDashboardPage() {
     }
   }
 
-  function OpenCardSimple({ d }: { d: DeliveryRow }) {
+  async function shareFacebookOpenOnly(d: DeliveryRow) {
+    try {
+      setMsg(null);
+      setError(null);
+
+      const text = buildSharePostSimple(d);
+      const ok = await copyText(text);
+
+      if (ok) setMsg("📤 SHARE текстийг хууллаа. Facebook дээр paste хийгээд post хийгээрэй.");
+      else setMsg(text);
+
+      window.open("https://www.facebook.com/sharer/sharer.php?u=https://income.mn", "_blank");
+    } catch (e: any) {
+      setError(e?.message || "Шэр хийхэд алдаа гарлаа");
+    }
+  }
+
+  // ✅ OPEN card (price-first, OPEN/SHARE emoji, “Юу хүргэх” pill)
+  function OpenCard({ d }: { d: DeliveryRow }) {
     const b = badge(d.status);
-    const isOpenTab = activeTab === "OPEN";
+    const fromArea = areaLine(d.pickup_district, d.pickup_khoroo);
+    const toArea = areaLine(d.dropoff_district, d.dropoff_khoroo);
 
     return (
-      <div className="rounded-2xl border border-slate-200 bg-white p-4">
-        <div className="flex items-center justify-between gap-3">
+      <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs ${b.cls}`}>
                 {b.text}
               </span>
@@ -380,34 +341,52 @@ export default function SellerDashboardPage() {
               )}
             </div>
 
-            <div className="mt-2 text-sm font-semibold text-slate-900">
-              {shorten(d.from_address, 92)} → {shorten(d.to_address, 92)}
+            {/* ✅ 1 мөр route: өөр өөр өнгө */}
+            <div className="mt-2 text-sm font-semibold leading-snug">
+              <span className="text-emerald-700">{fromArea}</span>
+              <span className="mx-2 text-slate-400">→</span>
+              <span className="text-emerald-900">{toArea}</span>
             </div>
 
-            {d.note ? <div className="mt-1 text-xs text-slate-600">{shorten(d.note, 120)}</div> : null}
-          </div>
-
-          <div className="shrink-0 text-right">
-            <div className="text-sm font-bold text-slate-900">{fmtPrice(d.price_mnt)}</div>
-
-            <div className="mt-2 flex flex-col gap-2">
+            {/* ✅ “Юу хүргэх” — pill/button */}
+            <div className="mt-3">
               <button
                 onClick={() => openDetail(d)}
-                className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800"
+                className="inline-flex max-w-full items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-900 hover:bg-emerald-100"
+                title="Юу хүргэх — дэлгэрэнгүй"
               >
-                Дэлгэрэнгүй
+                <span className="text-emerald-700">📦</span>
+                <span className="text-xs font-bold tracking-wide">ЮУ ХҮРГЭХ</span>
+                <span className="truncate text-emerald-900">
+                  {d.note ? shorten(d.note, 80) : "—"}
+                </span>
+              </button>
+            </div>
+          </div>
+
+          {/* ✅ Үнэ хамгийн чухал */}
+          <div className="shrink-0 text-right">
+            <div className="text-[11px] text-slate-500">Үнэ</div>
+            <div className="text-xl font-extrabold tracking-tight text-emerald-700">
+              {fmtPrice(d.price_mnt)}
+            </div>
+
+            <div className="mt-2 flex items-center justify-end gap-2">
+              <button
+                onClick={() => openDetail(d)}
+                className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-900 hover:border-slate-300"
+                title="OPEN"
+              >
+                📂 OPEN
               </button>
 
-              {/* ✅ Share зөвхөн Seller OPEN таб дээр */}
-              {isOpenTab && (
-                <button
-                  onClick={() => void shareFacebookOpenOnly(d, setMsg, setError)}
-                  className="rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700"
-                  title="Зөвхөн OPEN таб дээр"
-                >
-                  Facebook-д шэр
-                </button>
-              )}
+              <button
+                onClick={() => void shareFacebookOpenOnly(d)}
+                className="rounded-xl bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-700"
+                title="SHARE"
+              >
+                📤 SHARE
+              </button>
             </div>
           </div>
         </div>
@@ -417,6 +396,8 @@ export default function SellerDashboardPage() {
 
   function DeliveryCardNormal({ d }: { d: DeliveryRow }) {
     const b = badge(d.status);
+    const fromArea = areaLine(d.pickup_district, d.pickup_khoroo);
+    const toArea = areaLine(d.dropoff_district, d.dropoff_khoroo);
 
     return (
       <div className="rounded-2xl border border-slate-200 bg-white p-4">
@@ -428,13 +409,13 @@ export default function SellerDashboardPage() {
               </span>
             </div>
 
-            <div className="mt-2 text-sm font-semibold text-slate-900">
-              {shorten(d.from_address, 92)} → {shorten(d.to_address, 92)}
+            <div className="mt-2 text-sm font-semibold">
+              <span className="text-emerald-700">{fromArea}</span>
+              <span className="mx-2 text-slate-400">→</span>
+              <span className="text-emerald-900">{toArea}</span>
             </div>
 
-            {d.note ? <div className="mt-1 text-xs text-slate-600">{shorten(d.note, 130)}</div> : null}
-
-            <div className="mt-2 text-sm font-bold text-slate-900">{fmtPrice(d.price_mnt)}</div>
+            <div className="mt-2 text-sm font-bold text-emerald-700">{fmtPrice(d.price_mnt)}</div>
           </div>
 
           <div className="flex shrink-0 flex-col gap-2 sm:items-end">
@@ -445,14 +426,13 @@ export default function SellerDashboardPage() {
               Дэлгэрэнгүй
             </button>
 
-            {/* ✅ Алга болсон товчийг буцаав */}
             {d.status === "ASSIGNED" && (
               <button
                 onClick={() => void markPickedUp(d.id)}
                 disabled={!!actLoading[d.id]}
                 className={[
                   "rounded-xl px-4 py-2 text-sm font-semibold text-white",
-                  actLoading[d.id] ? "bg-slate-400" : "bg-indigo-600 hover:bg-indigo-700",
+                  actLoading[d.id] ? "bg-slate-400" : "bg-emerald-600 hover:bg-emerald-700",
                 ].join(" ")}
               >
                 Жолооч барааг авч явлаа
@@ -465,7 +445,7 @@ export default function SellerDashboardPage() {
                 disabled={!!actLoading[d.id]}
                 className={[
                   "rounded-xl px-4 py-2 text-sm font-semibold text-white",
-                  actLoading[d.id] ? "bg-slate-400" : "bg-rose-600 hover:bg-rose-700",
+                  actLoading[d.id] ? "bg-slate-400" : "bg-slate-900 hover:bg-slate-800",
                 ].join(" ")}
               >
                 Устгах
@@ -488,13 +468,13 @@ export default function SellerDashboardPage() {
           <div className="flex gap-2">
             <button
               onClick={() => router.push("/seller/new-delivery")}
-              className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800"
+              className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700"
             >
               + Шинэ хүргэлт
             </button>
             <button
               onClick={logout}
-              className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100"
+              className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:border-slate-300"
             >
               Гарах
             </button>
@@ -502,7 +482,7 @@ export default function SellerDashboardPage() {
         </div>
 
         {error && (
-          <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+          <div className="mt-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
             {error}
           </div>
         )}
@@ -513,10 +493,10 @@ export default function SellerDashboardPage() {
         )}
 
         <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
-          <Pill label="Нээлттэй" value={String(tabCounts.OPEN)} accent="emerald" />
-          <Pill label="Сонгосон" value={String(tabCounts.ASSIGNED)} accent="sky" />
-          <Pill label="Замд" value={String(tabCounts.ON_ROUTE)} accent="indigo" />
-          <Pill label="Хүргэсэн" value={String(tabCounts.DELIVERED)} accent="amber" />
+          <Pill label="Нээлттэй" value={String(tabCounts.OPEN)} />
+          <Pill label="Сонгосон" value={String(tabCounts.ASSIGNED)} />
+          <Pill label="Замд" value={String(tabCounts.ON_ROUTE)} />
+          <Pill label="Хүргэсэн" value={String(tabCounts.DELIVERED)} />
         </div>
 
         <div className="mt-5 flex flex-wrap gap-2">
@@ -529,11 +509,12 @@ export default function SellerDashboardPage() {
                 onClick={() => changeTab(t.id)}
                 className={
                   isActive
-                    ? "rounded-full bg-slate-900 text-white px-4 py-2 text-sm font-semibold"
+                    ? "rounded-full bg-emerald-600 text-white px-4 py-2 text-sm font-semibold hover:bg-emerald-700"
                     : "rounded-full border border-slate-200 bg-white text-slate-700 px-4 py-2 text-sm font-semibold hover:border-slate-300"
                 }
               >
-                {t.label} <span className={isActive ? "opacity-80" : "text-slate-400"}>({count})</span>
+                {t.label}{" "}
+                <span className={isActive ? "opacity-80" : "text-slate-400"}>({count})</span>
               </button>
             );
           })}
@@ -541,17 +522,13 @@ export default function SellerDashboardPage() {
 
         <div className="mt-5">
           {loading ? (
-            <div className="rounded-2xl border border-slate-200 bg-white p-6 text-slate-600">
-              Ачааллаж байна…
-            </div>
+            <div className="rounded-2xl border border-slate-200 bg-white p-6 text-slate-600">Ачаалж байна…</div>
           ) : filtered.length === 0 ? (
-            <div className="rounded-2xl border border-slate-200 bg-white p-6 text-slate-600">
-              Энэ таб дээр хүргэлт алга.
-            </div>
+            <div className="rounded-2xl border border-slate-200 bg-white p-6 text-slate-600">Энэ таб дээр хүргэлт алга.</div>
           ) : (
             <div className="grid gap-3">
               {filtered.map((d) => {
-                if (activeTab === "OPEN") return <OpenCardSimple key={d.id} d={d} />;
+                if (activeTab === "OPEN") return <OpenCard key={d.id} d={d} />;
                 return <DeliveryCardNormal key={d.id} d={d} />;
               })}
             </div>

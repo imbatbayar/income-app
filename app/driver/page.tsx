@@ -1,14 +1,14 @@
 "use client";
 
 /* ===========================
- * app/driver/page.tsx (FINAL v7.1)
+ * app/driver/page.tsx (FINAL v7.2)
  *
- * ✅ Driver талд Seller info (name+phone) нэмэв:
- * - ASSIGNED / ON_ROUTE / DELIVERED дээр (зөвхөн өөрт оноогдсон үед)
- * - tel: залгах товч
+ * ✅ FIX: Driver list дээр pickup/dropoff Дүүрэг/Хороо (4 талбар) харуулна
+ * ✅ UI: OPEN card-г “3 тусдаа блок” болгож зөөлөн өнгөөр ялгав
  *
  * ✅ Flow:
  * OPEN -> ASSIGNED -> ON_ROUTE -> DELIVERED
+ *
  * ✅ Seller action:
  * - ASSIGNED -> ON_ROUTE : SELLER тал "Жолооч барааг авч явлаа"
  *
@@ -19,8 +19,8 @@
  * - DELIVERED: "Устгах" (driver_hidden=true)
  *
  * ⚠ Privacy:
- * - List дээр buyer-н нарийн хаяг/утас огт харуулахгүй.
- *   (Private info зөвхөн /driver/delivery/[id] дээр ON_ROUTE+ үед)
+ * - List дээр buyer-н утас зэрэг private info харуулахгүй.
+ * - Seller info зөвхөн өөрт оноогдсон үед (OPEN биш төлвүүд дээр) гарна.
  * =========================== */
 
 import { useEffect, useMemo, useState } from "react";
@@ -50,6 +50,12 @@ type DeliveryRow = {
   from_address: string | null;
   to_address: string | null;
   note: string | null;
+
+  // ✅ UB admin fields (шинэ)
+  pickup_district: string | null;
+  pickup_khoroo: string | null;
+  dropoff_district: string | null;
+  dropoff_khoroo: string | null;
 
   status: DeliveryStatus;
   created_at: string;
@@ -98,9 +104,17 @@ function fmtDT(iso: string | null | undefined) {
 
 function shorten(s: string | null, n = 60) {
   const t = String(s || "").trim();
-  if (!t) return "";
+  if (!t) return "—";
   if (t.length <= n) return t;
   return t.slice(0, n).replace(/\s+$/, "") + "…";
+}
+
+function areaLine(district?: string | null, khoroo?: string | null) {
+  const dist = String(district || "").trim();
+  const kh = String(khoroo || "").trim();
+  if (!dist && !kh) return "";
+  if (dist && kh) return `${dist} · ${kh}-р хороо`;
+  return dist || (kh ? `${kh}-р хороо` : "");
 }
 
 function badge(status: DeliveryStatus) {
@@ -190,10 +204,7 @@ export default function DriverPage() {
     }
 
     try {
-      const { data, error } = await supabase
-        .from("users")
-        .select("id,name,phone")
-        .in("id", sellerIds);
+      const { data, error } = await supabase.from("users").select("id,name,phone").in("id", sellerIds);
 
       if (error) {
         console.warn(error);
@@ -219,7 +230,27 @@ export default function DriverPage() {
       const { data: d1, error: e1 } = await supabase
         .from("deliveries")
         .select(
-          "id,seller_id,from_address,to_address,note,status,created_at,price_mnt,delivery_type,chosen_driver_id,seller_marked_paid,driver_confirmed_payment,dispute_opened_at,closed_at,driver_hidden"
+          [
+            "id",
+            "seller_id",
+            "from_address",
+            "to_address",
+            "note",
+            "pickup_district",
+            "pickup_khoroo",
+            "dropoff_district",
+            "dropoff_khoroo",
+            "status",
+            "created_at",
+            "price_mnt",
+            "delivery_type",
+            "chosen_driver_id",
+            "seller_marked_paid",
+            "driver_confirmed_payment",
+            "dispute_opened_at",
+            "closed_at",
+            "driver_hidden",
+          ].join(",")
         )
         .eq("driver_hidden", false)
         .order("created_at", { ascending: false });
@@ -235,12 +266,22 @@ export default function DriverPage() {
 
       if (e2) throw e2;
 
-      const deliveries = (d1 || []) as DeliveryRow[];
-      setItems(deliveries);
+      const deliveries = (d1 || []) as any as DeliveryRow[];
+
+      // ⚙️ Хэрэв DB дээр талбар дутуу байвал null болгож “уналтгүй” болгоно
+      const safeDeliveries = deliveries.map((x) => ({
+        ...x,
+        pickup_district: (x as any).pickup_district ?? null,
+        pickup_khoroo: (x as any).pickup_khoroo ?? null,
+        dropoff_district: (x as any).dropoff_district ?? null,
+        dropoff_khoroo: (x as any).dropoff_khoroo ?? null,
+      })) as DeliveryRow[];
+
+      setItems(safeDeliveries);
       setMyBids((b1 || []) as BidLite[]);
 
       // ✅ seller info preload
-      void fetchSellersForMine(deliveries, driverId);
+      void fetchSellersForMine(safeDeliveries, driverId);
     } catch (e: any) {
       console.error(e);
       setError("Мэдээлэл ачааллахад алдаа гарлаа.");
@@ -327,11 +368,7 @@ export default function DriverPage() {
     try {
       const my = myBids.find((b) => b.delivery_id === deliveryId);
       if (my) {
-        const { error } = await supabase
-          .from("driver_bids")
-          .delete()
-          .eq("id", my.id)
-          .eq("driver_id", user.id);
+        const { error } = await supabase.from("driver_bids").delete().eq("id", my.id).eq("driver_id", user.id);
 
         if (error) throw error;
 
@@ -371,14 +408,12 @@ export default function DriverPage() {
 
       if (e1) throw e1;
 
-      if (!data || data.status !== "DELIVERED") {
+      if (!data || (data as any).status !== "DELIVERED") {
         setError("Шилжилт амжилтгүй. (ON_ROUTE→DELIVERED) Дахин оролдоно уу.");
         return;
       }
 
-      setItems((prev) =>
-        prev.map((x) => (x.id === deliveryId ? { ...x, status: "DELIVERED" as any } : x))
-      );
+      setItems((prev) => prev.map((x) => (x.id === deliveryId ? { ...x, status: "DELIVERED" as any } : x)));
 
       changeTab("DELIVERED");
       setMsg("Хүргэлтийг хүргэсэн гэж тэмдэглэлээ.");
@@ -503,9 +538,7 @@ export default function DriverPage() {
         {/* list */}
         <div className="mt-4">
           {loading ? (
-            <div className="rounded-2xl border border-slate-200 bg-white p-6 text-sm text-slate-600">
-              Ачаалж байна…
-            </div>
+            <div className="rounded-2xl border border-slate-200 bg-white p-6 text-sm text-slate-600">Ачаалж байна…</div>
           ) : filtered.length === 0 ? (
             <div className="rounded-2xl border border-slate-200 bg-white p-6 text-sm text-slate-600">
               Энэ таб дээр хүргэлт алга.
@@ -517,10 +550,13 @@ export default function DriverPage() {
                 const isMine = d.chosen_driver_id === user.id;
                 const seller = isMine ? sellerMap[d.seller_id] : undefined;
 
+                const fromArea = areaLine(d.pickup_district, d.pickup_khoroo);
+                const toArea = areaLine(d.dropoff_district, d.dropoff_khoroo);
+
                 return (
                   <div key={d.id} className="rounded-2xl border border-slate-200 bg-white p-4">
                     <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
+                      <div className="min-w-0 w-full">
                         <div className="flex items-center gap-2">
                           <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs ${b.cls}`}>
                             {b.text}
@@ -528,38 +564,70 @@ export default function DriverPage() {
                           <span className="text-xs text-slate-500">{fmtDT(d.created_at)}</span>
                         </div>
 
-                        <div className="mt-2 text-sm font-semibold text-slate-900">
-                          {shorten(d.from_address, 80)} → {shorten(d.to_address, 80)}
-                        </div>
-
-                        {d.note && <div className="mt-1 text-xs text-slate-600">{shorten(d.note, 120)}</div>}
-
-                        <div className="mt-2 text-sm font-bold text-slate-900">{fmtPrice(d.price_mnt)}</div>
-
-                        {/* ✅ Seller info: зөвхөн өөрт оноогдсон үед */}
-                        {isMine && d.status !== "OPEN" && (
-                          <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
-                            <div className="text-[11px] text-slate-500">Худалдагч</div>
-                            <div className="mt-1 flex flex-wrap items-center gap-2">
-                              <div className="text-xs font-semibold text-slate-800">
-                                {seller?.name || "—"}
-                              </div>
-                              {seller?.phone ? (
-                                <>
-                                  <div className="text-xs text-slate-600">{seller.phone}</div>
-                                  <a
-                                    href={`tel:${seller.phone}`}
-                                    className="ml-auto rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800"
-                                  >
-                                    Залгах
-                                  </a>
-                                </>
-                              ) : (
-                                <div className="text-xs text-slate-500">Утас: —</div>
-                              )}
+                        {/* ✅ NEW: зөөлөн өнгийн 3 блок */}
+                        <div className="mt-3 grid gap-2">
+                          <div className="rounded-xl border border-emerald-100 bg-emerald-50 p-3">
+                            <div className="text-[11px] text-emerald-900/70">Авах (хаанаас)</div>
+                            <div className="mt-1 text-xs font-semibold text-slate-900">
+                              {fromArea ? <span className="text-slate-700">{fromArea} · </span> : null}
+                              {shorten(d.from_address, 90)}
                             </div>
                           </div>
-                        )}
+
+                          <div className="rounded-xl border border-amber-100 bg-amber-50 p-3">
+                            <div className="text-[11px] text-amber-900/70">Хүргэх (хаашаа)</div>
+                            <div className="mt-1 text-xs font-semibold text-slate-900">
+                              {toArea ? <span className="text-slate-700">{toArea} · </span> : null}
+                              {shorten(d.to_address, 90)}
+                            </div>
+                          </div>
+
+                          <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <div className="text-[11px] text-slate-500">Юу хүргэх</div>
+                                <div className="mt-1 text-xs font-semibold text-slate-900">
+                                  {d.note ? shorten(d.note, 120) : "—"}
+                                </div>
+                              </div>
+                              <div className="shrink-0 text-right">
+                                <div className="text-[11px] text-slate-500">Санал үнэ</div>
+                                <div className="mt-1 text-sm font-extrabold text-slate-900">{fmtPrice(d.price_mnt)}</div>
+                              </div>
+                            </div>
+
+                            {d.delivery_type ? (
+                              <div className="mt-2">
+                                <span className="inline-flex rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[11px] font-semibold text-slate-700">
+                                  {d.delivery_type}
+                                </span>
+                              </div>
+                            ) : null}
+                          </div>
+
+                          {/* ✅ Seller info: зөвхөн өөрт оноогдсон үед */}
+                          {isMine && d.status !== "OPEN" && (
+                            <div className="rounded-xl border border-slate-200 bg-white p-3">
+                              <div className="text-[11px] text-slate-500">Худалдагч</div>
+                              <div className="mt-1 flex flex-wrap items-center gap-2">
+                                <div className="text-xs font-semibold text-slate-800">{seller?.name || "—"}</div>
+                                {seller?.phone ? (
+                                  <>
+                                    <div className="text-xs text-slate-600">{seller.phone}</div>
+                                    <a
+                                      href={`tel:${seller.phone}`}
+                                      className="ml-auto rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800"
+                                    >
+                                      Залгах
+                                    </a>
+                                  </>
+                                ) : (
+                                  <div className="text-xs text-slate-500">Утас: —</div>
+                                )}
+                              </div>
+                            </div>
+                          )}
+                        </div>
                       </div>
 
                       <div className="shrink-0">
