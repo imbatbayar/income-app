@@ -78,10 +78,16 @@ function badge(status: DeliveryStatus) {
         cls: "border-indigo-200 bg-indigo-50 text-indigo-700",
       };
     case "ON_ROUTE":
-      return { text: "Замд", cls: "border-amber-200 bg-amber-50 text-amber-700" };
+      return {
+        text: "Замд",
+        cls: "border-amber-200 bg-amber-50 text-amber-700",
+      };
     case "DELIVERED":
     default:
-      return { text: "Хүргэсэн", cls: "border-slate-200 bg-slate-50 text-slate-700" };
+      return {
+        text: "Хүргэсэн",
+        cls: "border-slate-200 bg-slate-50 text-slate-700",
+      };
   }
 }
 
@@ -301,7 +307,17 @@ export default function SellerDashboardPage() {
 
       if (e1) throw e1;
 
+      // ✅ UI-г эвдэхгүй: local state дээр шууд шилжүүлээд таб-аа “Замд” болгоно
+      setItems((prev) =>
+        prev.map((x) =>
+          x.id === deliveryId ? ({ ...x, status: "ON_ROUTE" } as DeliveryRow) : x
+        )
+      );
+
       setMsg("Жолооч барааг авсан → Замд руу шилжлээ.");
+      changeTab("ON_ROUTE"); // ✅ таб шууд солих (router.push дотроо байгаа)
+
+      // ✅ сервертэй sync (тоон үзүүлэлт, жагсаалт зэрэг)
       await fetchAll(user.id);
     } catch (e: any) {
       setError(e?.message || "Алдаа гарлаа");
@@ -543,7 +559,6 @@ export default function SellerDashboardPage() {
             </div>
           )}
 
-          {/* ✅ Top 4 controls: SHORT + clickable, remove the duplicate half-round buttons */}
           <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
             <Pill
               label="Нээлттэй"
@@ -572,7 +587,8 @@ export default function SellerDashboardPage() {
           </div>
 
           <div className="mt-3 text-xs text-slate-500">
-            Одоо: <span className="font-semibold text-slate-700">
+            Одоо:{" "}
+            <span className="font-semibold text-slate-700">
               {SELLER_TABS.find((t) => t.id === activeTab)?.label || "—"}
             </span>
           </div>
