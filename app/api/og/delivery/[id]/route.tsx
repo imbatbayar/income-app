@@ -43,13 +43,16 @@ async function fetchShareRow(id: string): Promise<ShareRow | null> {
   return data?.[0] ?? null;
 }
 
-export async function GET(
-  _req: Request,
-  ctx: { params: Promise<{ id: string }> }
-) {
-  const { id } = await ctx.params;
+export async function GET(_req: Request, context: unknown) {
+  // ✅ Next 16 typegen дээр params нь object ч байж магадгүй, Promise ч байж магадгүй.
+  const ctx = context as { params?: any };
+  const p = ctx?.params;
 
-  const d = await fetchShareRow(id);
+  const resolved = typeof p?.then === "function" ? await p : p;
+  const id: string = resolved?.id;
+
+  const d = id ? await fetchShareRow(id) : null;
+
   const from = d ? areaLine(d.pickup_district, d.pickup_khoroo) : "—";
   const to = d ? areaLine(d.dropoff_district, d.dropoff_khoroo) : "—";
 
