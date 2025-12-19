@@ -10,6 +10,9 @@ import {
   getSellerTabForStatus,
 } from "@/lib/deliveryLogic";
 
+// ✅ NEW: SHARE button component (UI/logic бусдыг оролдохгүй)
+import ShareDeliveryButton from "@/app/components/ShareDeliveryButton";
+
 type Role = "seller" | "driver";
 
 type IncomeUser = {
@@ -584,13 +587,18 @@ export default function SellerDashboardPage() {
             📂 OPEN
           </button>
 
-          <button
-            onClick={() => void shareFacebookOpenOnly(d)}
-            className="rounded-xl bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-700"
-            title="SHARE"
-          >
-            📤 SHARE
-          </button>
+          {/* ✅ зөвхөн SHARE товчийг салгасан (UI/логик бусад нь хэвээр) */}
+          <ShareDeliveryButton
+            payload={{
+              id: d.id,
+              from: fromArea,
+              to: toArea,
+              priceText: fmtPrice(d.price_mnt),
+              note: d.note || "",
+            }}
+            onToast={(t) => setMsg(t)}
+            className="rounded-xl bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
+          />
         </div>
       </div>
     );
@@ -606,15 +614,14 @@ export default function SellerDashboardPage() {
     const isLate = d.status === "ON_ROUTE" && hours >= 3;
 
     return (
-                  <div
-              className={[
-                "rounded-2xl border p-4",
-                d.status === "PAID"
-                  ? "border-emerald-200 bg-emerald-50/40"
-                  : "border-slate-200 bg-white",
-              ].join(" ")}
-            >
-
+      <div
+        className={[
+          "rounded-2xl border p-4",
+          d.status === "PAID"
+            ? "border-emerald-200 bg-emerald-50/40"
+            : "border-slate-200 bg-white",
+        ].join(" ")}
+      >
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
