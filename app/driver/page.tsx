@@ -1,6 +1,6 @@
-export const dynamic = "force-dynamic";
-
 "use client";
+
+export const dynamic = "force-dynamic";
 
 /* ===========================
  * app/driver/page.tsx (FINAL v7.2.1)
