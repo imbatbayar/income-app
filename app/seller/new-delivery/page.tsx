@@ -1,11 +1,7 @@
 "use client";
 export const dynamic = "force-dynamic";
 
-
-import "leaflet/dist/leaflet.css";
-
 import dynamicImport from "next/dynamic";
-import L from "leaflet";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
@@ -98,52 +94,57 @@ function normalizeKhorooLabel(k: string) {
   return `${s} хороо`;
 }
 
-/**
- * ✅ Яг апп шиг icon-ууд
- * - АВАХ: 📦 (LOCK үед ногоон, EDIT үед улаан)
- * - ХҮРГЭХ: 👋
- */
-function mapEmojiIcon(kind: "pickupLocked" | "pickupEdit" | "dropoff") {
-  const html =
-    kind === "dropoff"
-      ? `<div style="
-          width:34px;height:34px;border-radius:12px;
-          background:#111827;color:#fff;
-          display:flex;align-items:center;justify-content:center;
-          font-size:18px;
-          border:2px solid rgba(255,255,255,.75);
-          box-shadow:0 6px 18px rgba(0,0,0,.22);
-        ">👋</div>`
-      : kind === "pickupEdit"
-      ? `<div style="
-          width:34px;height:34px;border-radius:12px;
-          background:#ef4444;color:#fff;
-          display:flex;align-items:center;justify-content:center;
-          font-size:18px;
-          border:2px solid rgba(255,255,255,.75);
-          box-shadow:0 6px 18px rgba(0,0,0,.22);
-        ">📦</div>`
-      : `<div style="
-          width:34px;height:34px;border-radius:12px;
-          background:#10b981;color:#052e1b;
-          display:flex;align-items:center;justify-content:center;
-          font-size:18px;
-          border:2px solid rgba(255,255,255,.75);
-          box-shadow:0 6px 18px rgba(0,0,0,.22);
-        ">📦</div>`;
-
-  return L.divIcon({
-    className: "",
-    html,
-    iconSize: [34, 34],
-    iconAnchor: [17, 17],
-  });
-}
-
 const LeafletMap = dynamicImport(
   async () => {
-    const RL = await import("react-leaflet");
+    // ✅ CSS + Leaflet + React-Leaflet бүгдийг зөвхөн client дээр ачаална
+    
+    const LeafletMod: any = await import("leaflet");
+    const L: any = LeafletMod?.default ?? LeafletMod;
+
+    const RL: any = await import("react-leaflet");
     const { MapContainer, TileLayer, Marker, Polyline } = RL;
+
+    /**
+     * ✅ Яг апп шиг icon-ууд
+     * - АВАХ: 📦 (LOCK үед ногоон, EDIT үед улаан)
+     * - ХҮРГЭХ: 👋
+     */
+    function mapEmojiIcon(kind: "pickupLocked" | "pickupEdit" | "dropoff") {
+      const html =
+        kind === "dropoff"
+          ? `<div style="
+              width:34px;height:34px;border-radius:12px;
+              background:#111827;color:#fff;
+              display:flex;align-items:center;justify-content:center;
+              font-size:18px;
+              border:2px solid rgba(255,255,255,.75);
+              box-shadow:0 6px 18px rgba(0,0,0,.22);
+            ">👋</div>`
+          : kind === "pickupEdit"
+          ? `<div style="
+              width:34px;height:34px;border-radius:12px;
+              background:#ef4444;color:#fff;
+              display:flex;align-items:center;justify-content:center;
+              font-size:18px;
+              border:2px solid rgba(255,255,255,.75);
+              box-shadow:0 6px 18px rgba(0,0,0,.22);
+            ">📦</div>`
+          : `<div style="
+              width:34px;height:34px;border-radius:12px;
+              background:#10b981;color:#052e1b;
+              display:flex;align-items:center;justify-content:center;
+              font-size:18px;
+              border:2px solid rgba(255,255,255,.75);
+              box-shadow:0 6px 18px rgba(0,0,0,.22);
+            ">📦</div>`;
+
+      return L.divIcon({
+        className: "",
+        html,
+        iconSize: [34, 34],
+        iconAnchor: [17, 17],
+      });
+    }
 
     type Props = {
       center: LatLng;
@@ -162,7 +163,7 @@ const LeafletMap = dynamicImport(
       onPickupChange,
       onDropoffChange,
     }: Props) {
-      const mapRef = useRef<L.Map | null>(null);
+      const mapRef = useRef<any>(null);
 
       const polyline = useMemo(() => {
         if (!isValidLatLng(pickup) || !isValidLatLng(dropoff)) return null;
@@ -185,8 +186,8 @@ const LeafletMap = dynamicImport(
 
       return (
         <MapContainer
-          ref={(map) => {
-            mapRef.current = (map as unknown as L.Map) || null;
+          ref={(map: any) => {
+            mapRef.current = map || null;
           }}
           center={[center.lat, center.lng]}
           zoom={12}
