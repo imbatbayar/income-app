@@ -1,12 +1,11 @@
 "use client";
 
 /* ===========================
- * app/driver/delivery/[id]/page.tsx (FINAL v7.3)
+ * app/driver/delivery/[id]/page.tsx (FINAL v7.3 - build fix)
  *
- * ✅ ADD:
- * - Сонгогдсон жолооч байвал Худалдагчийн нэр/утас харуулна + tel: залгах
- * ✅ Privacy unchanged:
- * - Buyer private info зөвхөн ON_ROUTE+ үед + chosen driver-т
+ * ✅ FIX:
+ * - DeliveryRouteMap component нь `height` prop авдаггүй байсан тул
+ *   height-г wrapper div дээр өгч, component руу height дамжуулахгүй болгосон.
  * =========================== */
 
 import { useEffect, useMemo, useState } from "react";
@@ -314,7 +313,7 @@ export default function DriverDeliveryDetailPage() {
 
       setDelivery(d);
 
-      // ✅ seller info load (for chosen driver, or just show name/phone if needed)
+      // ✅ seller info load
       void fetchSeller(d.seller_id);
 
       // my bid
@@ -901,11 +900,12 @@ export default function DriverDeliveryDetailPage() {
             {hasMap && (
               <section className="rounded-2xl border border-slate-200 bg-white p-4 space-y-3">
                 <h2 className="text-sm font-semibold text-slate-900">Хүргэлтийн чиглэл</h2>
-                <div className="overflow-hidden rounded-xl border border-slate-200">
+
+                {/* ✅ FIX: height prop-г component руу дамжуулахгүй. Wrapper дээр өндөр өгнө. */}
+                <div className="overflow-hidden rounded-xl border border-slate-200" style={{ height: 260 }}>
                   <DeliveryRouteMap
                     pickup={{ lat: delivery.pickup_lat!, lng: delivery.pickup_lng! }}
                     dropoff={{ lat: delivery.dropoff_lat!, lng: delivery.dropoff_lng! }}
-                    height={260}
                   />
                 </div>
               </section>
