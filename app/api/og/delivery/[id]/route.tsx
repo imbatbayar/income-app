@@ -12,6 +12,12 @@ type ShareRow = {
   dropoff_khoroo: string | null;
 };
 
+type RouteContext = {
+  params: {
+    id: string;
+  };
+};
+
 function areaLine(d?: string | null, k?: string | null) {
   const dd = String(d || "").trim();
   const kk = String(k || "").trim();
@@ -27,7 +33,9 @@ async function fetchShareRow(id: string): Promise<ShareRow | null> {
   if (!url || !key) return null;
 
   const res = await fetch(
-    `${url}/rest/v1/deliveries_share?id=eq.${id}&select=id,price_mnt,note,pickup_district,pickup_khoroo,dropoff_district,dropoff_khoroo`,
+    `${url}/rest/v1/deliveries_share?id=eq.${encodeURIComponent(
+      id
+    )}&select=id,price_mnt,note,pickup_district,pickup_khoroo,dropoff_district,dropoff_khoroo`,
     {
       headers: {
         apikey: key,
@@ -41,11 +49,10 @@ async function fetchShareRow(id: string): Promise<ShareRow | null> {
   return data?.[0] ?? null;
 }
 
-export async function GET(
-  _req: Request,
-  { params }: { params: { id: string } }
-) {
-  const d = await fetchShareRow(params.id);
+export async function GET(_req: Request, context: RouteContext) {
+  const { id } = context.params;
+
+  const d = await fetchShareRow(id);
 
   const from = d ? areaLine(d.pickup_district, d.pickup_khoroo) : "—";
   const to = d ? areaLine(d.dropoff_district, d.dropoff_khoroo) : "—";
