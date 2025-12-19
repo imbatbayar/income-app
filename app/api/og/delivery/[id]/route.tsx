@@ -12,12 +12,6 @@ type ShareRow = {
   dropoff_khoroo: string | null;
 };
 
-type RouteContext = {
-  params: {
-    id: string;
-  };
-};
-
 function areaLine(d?: string | null, k?: string | null) {
   const dd = String(d || "").trim();
   const kk = String(k || "").trim();
@@ -49,11 +43,13 @@ async function fetchShareRow(id: string): Promise<ShareRow | null> {
   return data?.[0] ?? null;
 }
 
-export async function GET(_req: Request, context: RouteContext) {
-  const { id } = context.params;
+export async function GET(
+  _req: Request,
+  ctx: { params: Promise<{ id: string }> }
+) {
+  const { id } = await ctx.params;
 
   const d = await fetchShareRow(id);
-
   const from = d ? areaLine(d.pickup_district, d.pickup_khoroo) : "—";
   const to = d ? areaLine(d.dropoff_district, d.dropoff_khoroo) : "—";
 
