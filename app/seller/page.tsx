@@ -85,6 +85,12 @@ function badge(status: DeliveryStatus) {
         text: "Замд гарлаа",
         cls: "border-amber-200 bg-amber-50 text-amber-700",
       };
+    // ✅ NEW: PAID badge (бага зэрэг ногоон)
+    case "PAID":
+      return {
+        text: "Төлсөн",
+        cls: "border-emerald-200 bg-emerald-50 text-emerald-800",
+      };
     case "DELIVERED":
     default:
       return {
@@ -305,22 +311,42 @@ export default function SellerDashboardPage() {
     return items.filter((d) => getSellerTabForStatus(d.status) === activeTab);
   }, [items, activeTab]);
 
-  // ✅ ON_ROUTE үед: хамгийн удаж байгаа нь дээр (on_route_at хамгийн эрт)
+  // ✅ sort:
+  // - ON_ROUTE: удаан нь дээр (on_route_at хамгийн эрт)
+  // - DELIVERED tab: "Хүргэсэн"(DELIVERED) дээр, "Төлсөн"(PAID) доор
   const sorted = useMemo(() => {
     // tick ашигласнаар ON_ROUTE дээр хугацаа амьд шинэчлэгдэнэ
-    if (activeTab !== "ON_ROUTE") return filtered;
+    if (activeTab === "ON_ROUTE") {
+      const copy = [...filtered];
+      copy.sort((a, b) => {
+        const ta = a.on_route_at ? new Date(a.on_route_at).getTime() : 0;
+        const tb = b.on_route_at ? new Date(b.on_route_at).getTime() : 0;
 
-    const copy = [...filtered];
-    copy.sort((a, b) => {
-      const ta = a.on_route_at ? new Date(a.on_route_at).getTime() : 0;
-      const tb = b.on_route_at ? new Date(b.on_route_at).getTime() : 0;
+        if (!ta && tb) return 1;
+        if (ta && !tb) return -1;
 
-      if (!ta && tb) return 1;
-      if (ta && !tb) return -1;
+        return ta - tb;
+      });
+      return copy;
+    }
 
-      return ta - tb;
-    });
-    return copy;
+    // ✅ DELIVERED таб дээр: PAID нь доор орно
+    if (activeTab === "DELIVERED") {
+      const rank = (s: DeliveryStatus) => (s === "PAID" ? 1 : 0); // DELIVERED=0, PAID=1
+      const copy = [...filtered];
+      copy.sort((a, b) => {
+        const ra = rank(a.status);
+        const rb = rank(b.status);
+        if (ra !== rb) return ra - rb;
+
+        const ta = a.created_at ? new Date(a.created_at).getTime() : 0;
+        const tb = b.created_at ? new Date(b.created_at).getTime() : 0;
+        return tb - ta;
+      });
+      return copy;
+    }
+
+    return filtered;
   }, [filtered, activeTab, tick]);
 
   const tabCounts = useMemo(() => {
@@ -453,7 +479,10 @@ export default function SellerDashboardPage() {
   }
 
   // ✅ Найдваргүй жолооч
-  async function markDriverUnreliable(deliveryId: string, driverId: string | null) {
+  async function markDriverUnreliable(
+    deliveryId: string,
+    driverId: string | null
+  ) {
     if (!user) return;
     if (!driverId) return;
     if (actLoading[deliveryId]) return;
@@ -577,7 +606,15 @@ export default function SellerDashboardPage() {
     const isLate = d.status === "ON_ROUTE" && hours >= 3;
 
     return (
-      <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                  <div
+              className={[
+                "rounded-2xl border p-4",
+                d.status === "PAID"
+                  ? "border-emerald-200 bg-emerald-50/40"
+                  : "border-slate-200 bg-white",
+              ].join(" ")}
+            >
+
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
@@ -637,7 +674,8 @@ export default function SellerDashboardPage() {
               </button>
             )}
 
-            {d.status === "DELIVERED" && (
+            {/* ✅ DELIVERED + PAID дээр delete харагдана (UI эвдэхгүй) */}
+            {(d.status === "DELIVERED" || d.status === "PAID") && (
               <button
                 onClick={() => void deleteDelivered(d.id)}
                 disabled={!!actLoading[d.id]}
@@ -648,7 +686,7 @@ export default function SellerDashboardPage() {
                     : "bg-slate-900 hover:bg-slate-800",
                 ].join(" ")}
               >
-                del🗑️
+                delete 🗑️
               </button>
             )}
           </div>

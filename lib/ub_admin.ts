@@ -31,6 +31,6 @@ export function getKhorooOptions(district?: string) {
   if (!d) return [];
   return Array.from({ length: d.khorooCount }, (_, i) => {
     const n = i + 1;
-    return { value: String(n), label: `${n}-р хороо` };
+    return { value: String(n), label: `${n} хороо` };
   });
 }

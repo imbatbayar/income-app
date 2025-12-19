@@ -85,9 +85,15 @@ async function geocodeTryMany(queries: string[]) {
 function normalizeKhorooLabel(k: string) {
   const s = String(k || "").trim();
   if (!s) return "";
-  if (/^\d+$/.test(s)) return `${s}-р хороо`;
-  if (s.includes("хороо")) return s;
-  return `${s}-р хороо`;
+
+  // ✅ "1-р хороо" биш — "1 хороо"
+  if (/^\d+$/.test(s)) return `${s} хороо`;
+
+  // "1-р хороо" байвал "1 хороо" болгож цэвэрлэнэ
+  if (s.includes("хороо"))
+    return s.replace(/-р\s*/g, " ").replace(/\s+/g, " ").trim();
+
+  return `${s} хороо`;
 }
 
 /**

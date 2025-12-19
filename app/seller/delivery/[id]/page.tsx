@@ -119,13 +119,21 @@ function badge(status: DeliveryStatus) {
         text: "Хүргэсэн",
         cls: "bg-amber-50 text-amber-700 border-amber-100",
       };
+    case "PAID":
+      return {
+        text: "Төлсөн",
+        cls: "bg-emerald-50 text-emerald-800 border-emerald-100",
+      };
     case "CANCELLED":
       return {
         text: "Цуцалсан",
         cls: "bg-rose-50 text-rose-700 border-rose-100",
       };
     default:
-      return { text: status, cls: "bg-slate-50 text-slate-700 border-slate-200" };
+      return {
+        text: status,
+        cls: "bg-slate-50 text-slate-700 border-slate-200",
+      };
   }
 }
 
@@ -168,6 +176,9 @@ export default function SellerDeliveryDetailPage() {
 
   // ✅ найдваргүй жолооч (loading)
   const [unreliableLoading, setUnreliableLoading] = useState(false);
+
+  // ✅ Seller: DELIVERED -> PAID
+  const [paidLoading, setPaidLoading] = useState(false);
 
   useEffect(() => {
     if (!msg && !error) return;
@@ -354,6 +365,7 @@ export default function SellerDeliveryDetailPage() {
     [delivery]
   );
 
+  // ✅ MAP-д null-ыг зөв дамжуулна (TS алдаа арилна)
   const pickup = useMemo(() => {
     if (!delivery) return null;
     if (delivery.pickup_lat == null || delivery.pickup_lng == null) return null;
@@ -584,14 +596,11 @@ export default function SellerDeliveryDetailPage() {
     try {
       const u = encodeURIComponent("https://income.mn");
       const quote = encodeURIComponent(text);
-      window.open(
-        `https://www.facebook.com/sharer/sharer.php?u=${u}&quote=${quote}`,
-        "_blank"
-      );
+      window.open(`https://www.facebook.com/sharer/sharer.php?u=${u}&quote=${quote}`, "_blank");
     } catch {}
   }
 
-  // ✅ Payment helpers (DELIVERED дээр map-ийн ДЭЭР гарна)
+  // ✅ Payment helpers (DELIVERED/PAID дээр map-ийн ДЭЭР гарна)
   const payIban = (chosenDriver?.bank_iban || "").trim();
   const payAccount = (chosenDriver?.bank_account || "").trim();
   const payHolder = (chosenDriver?.bank_holder || chosenDriver?.name || "").trim();
@@ -605,6 +614,42 @@ export default function SellerDeliveryDetailPage() {
     const ok = await copyText(value);
     if (ok) setMsg(`${label} хууллаа.`);
     else setError("Clipboard зөвшөөрөлгүй байна. (Хуулах боломжгүй)");
+  }
+
+  // ✅ Төлбөр төлсөн (Seller): DELIVERED -> PAID
+  async function markPaid() {
+    if (!delivery || !user) return;
+    if (paidLoading) return;
+    if (delivery.status !== "DELIVERED") return;
+
+    setPaidLoading(true);
+    setError(null);
+    setMsg(null);
+
+    try {
+      const { data, error: e1 } = await supabase
+        .from("deliveries")
+        .update({ status: "PAID" })
+        .eq("id", delivery.id)
+        .eq("seller_id", user.id)
+        .eq("status", "DELIVERED")
+        .select("id,status")
+        .maybeSingle();
+
+      if (e1) throw e1;
+      if (!data || (data as any).status !== "PAID") {
+        setError("Тэмдэглэх амжилтгүй. Дахин оролдоно уу.");
+        return;
+      }
+
+      setDelivery({ ...delivery, status: "PAID" });
+      setMsg("Төлсөн гэж тэмдэглэлээ.");
+    } catch (e: any) {
+      console.error(e);
+      setError("Төлсөн гэж тэмдэглэхэд алдаа гарлаа.");
+    } finally {
+      setPaidLoading(false);
+    }
   }
 
   if (loading) {
@@ -703,12 +748,18 @@ export default function SellerDeliveryDetailPage() {
                     </div>
                   )}
 
-                  {/* ✅ DELIVERED үед — ганц л анхааруулга */}
-                  {delivery.status === "DELIVERED" && (
+                  {/* ✅ DELIVERED/PAID үед — ганц л анхааруулга */}
+                  {(delivery.status === "DELIVERED" || delivery.status === "PAID") && (
                     <div className="mt-3 rounded-2xl border border-emerald-200 bg-emerald-50/70 px-3 py-2">
                       <div className="text-xs leading-relaxed text-emerald-900">
                         <span className="font-extrabold">Мэдэгдэл:</span> Жолооч таны барааг амжилттай
                         хүргэсэн байна.
+                        {delivery.status === "PAID" && (
+                          <>
+                            {" "}
+                            <span className="font-semibold">(Төлбөр төлсөн)</span>
+                          </>
+                        )}
                       </div>
                     </div>
                   )}
@@ -822,8 +873,8 @@ export default function SellerDeliveryDetailPage() {
               )}
             </div>
 
-            {/* ✅ DELIVERED үед: Жолоочийн төлбөр (MAP-ийн ДЭЭР) */}
-            {delivery.status === "DELIVERED" && (
+            {/* ✅ DELIVERED/PAID үед: Жолоочийн төлбөр (MAP-ийн ДЭЭР) */}
+            {(delivery.status === "DELIVERED" || delivery.status === "PAID") && (
               <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
                 <div className="text-sm font-semibold text-slate-900">
                   Хүргэлт хийсэн үнэн бол та доорх данс руу жолоочийн төлбөрийг шилжүүлээрэй.
@@ -835,56 +886,51 @@ export default function SellerDeliveryDetailPage() {
 
                 <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50 p-3">
                   <div className="grid gap-2">
-                    <div className="flex items-center justify-between gap-2">
+                    {/* ✅ Responsive copy rows (mobile эвдрэхгүй) */}
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
                       <div className="min-w-0">
                         <div className="text-[11px] font-semibold text-slate-600">IBAN</div>
-                        <div className="truncate text-sm font-extrabold text-slate-900">
-                          {payIban || "—"}
-                        </div>
+                        <div className="break-all text-sm font-extrabold text-slate-900">{payIban || "—"}</div>
                       </div>
                       <button
                         type="button"
                         onClick={() => void copyField("IBAN", payIban)}
-                        className="shrink-0 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900 hover:border-slate-300 disabled:opacity-60"
+                        className="inline-flex w-full items-center justify-center rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900 hover:border-slate-300 disabled:opacity-60 sm:w-auto"
                         disabled={!payIban}
                         title="Хуулах"
                       >
-                        💾
+                        💾 <span className="ml-2 sm:hidden">Хуулах</span>
                       </button>
                     </div>
 
-                    <div className="flex items-center justify-between gap-2">
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
                       <div className="min-w-0">
                         <div className="text-[11px] font-semibold text-slate-600">Данс</div>
-                        <div className="truncate text-sm font-extrabold text-slate-900">
-                          {payAccount || "—"}
-                        </div>
+                        <div className="break-all text-sm font-extrabold text-slate-900">{payAccount || "—"}</div>
                       </div>
                       <button
                         type="button"
                         onClick={() => void copyField("Данс", payAccount)}
-                        className="shrink-0 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900 hover:border-slate-300 disabled:opacity-60"
+                        className="inline-flex w-full items-center justify-center rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900 hover:border-slate-300 disabled:opacity-60 sm:w-auto"
                         disabled={!payAccount}
                         title="Хуулах"
                       >
-                        💾
+                        💾 <span className="ml-2 sm:hidden">Хуулах</span>
                       </button>
                     </div>
 
-                    <div className="flex items-center justify-between gap-2">
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
                       <div className="min-w-0">
                         <div className="text-[11px] font-semibold text-slate-600">Утга</div>
-                        <div className="truncate text-sm font-extrabold text-slate-900">
-                          {payPurpose}
-                        </div>
+                        <div className="break-all text-sm font-extrabold text-slate-900">{payPurpose}</div>
                       </div>
                       <button
                         type="button"
                         onClick={() => void copyField("Утга", payPurpose)}
-                        className="shrink-0 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900 hover:border-slate-300 disabled:opacity-60"
+                        className="inline-flex w-full items-center justify-center rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900 hover:border-slate-300 disabled:opacity-60 sm:w-auto"
                         title="Хуулах"
                       >
-                        💾
+                        💾 <span className="ml-2 sm:hidden">Хуулах</span>
                       </button>
                     </div>
 
@@ -897,21 +943,34 @@ export default function SellerDeliveryDetailPage() {
                         Жолооч дансны мэдээллээ оруулаагүй байна. (Данс/IBAN байхгүй)
                       </div>
                     )}
+
+                    {/* ✅ Төлбөр төлсөн товч (DELIVERED -> PAID) */}
+                    <div className="pt-3">
+                      {delivery.status === "PAID" ? (
+                        <div className="inline-flex items-center rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-800">
+                          ✅ Төлсөн
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => void markPaid()}
+                          disabled={paidLoading}
+                          className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
+                        >
+                          {paidLoading ? "Тэмдэглэж байна…" : "Төлбөр төлсөн"}
+                        </button>
+                      )}
+
+                      <div className="mt-2 text-xs text-slate-500">
+                        Төлсөн гэж тэмдэглэсний дараа энэ хүргэлт “Төлсөн” болж ногоорно.
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>
             )}
 
-            {/* MAP */}
-            <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-              <div className="border-b border-slate-200 px-4 py-3">
-                <div className="text-sm font-semibold text-slate-900">Газрын зураг</div>
-                <div className="mt-0.5 text-xs text-slate-500">Авах (цэнхэр) · Хүргэх (ногоон)</div>
-              </div>
-              <DeliveryRouteMap pickup={pickup} dropoff={dropoff} />
-            </div>
-
-            {/* CHOSEN DRIVER */}
+            {/* ✅ CHOSEN DRIVER — газрын зурагны ДЭЭР (Дансны доор) */}
             {delivery.chosen_driver_id && (
               <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
                 <div className="text-sm font-semibold text-slate-900">Сонгосон жолооч</div>
@@ -920,22 +979,14 @@ export default function SellerDeliveryDetailPage() {
                   <div className="h-10 w-10 shrink-0 overflow-hidden rounded-full bg-slate-100">
                     {chosenDriver?.avatar_url ? (
                       // eslint-disable-next-line @next/next/no-img-element
-                      <img
-                        src={chosenDriver.avatar_url}
-                        alt=""
-                        className="h-full w-full object-cover"
-                      />
+                      <img src={chosenDriver.avatar_url} alt="" className="h-full w-full object-cover" />
                     ) : (
-                      <div className="flex h-full w-full items-center justify-center text-xs text-slate-500">
-                        —
-                      </div>
+                      <div className="flex h-full w-full items-center justify-center text-xs text-slate-500">—</div>
                     )}
                   </div>
 
                   <div className="min-w-0">
-                    <div className="text-sm font-semibold text-slate-900">
-                      {chosenDriver?.name || "Жолооч"}
-                    </div>
+                    <div className="text-sm font-semibold text-slate-900">{chosenDriver?.name || "Жолооч"}</div>
                     <div className="text-xs text-slate-600">{chosenDriver?.phone || "—"}</div>
                   </div>
 
@@ -956,12 +1007,8 @@ export default function SellerDeliveryDetailPage() {
                   <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2">
                     <div className="text-xs leading-relaxed text-slate-700">
                       Жолооч <span className="font-semibold">хэт удсан</span>, барааг{" "}
-                      <span className="font-semibold">хүргээгүй</span> эсвэл холбогдохгүй бол та энэ
-                      товчийг ашиглаж болно. Ингэснээр{" "}
-                      <span className="font-semibold">
-                        энэ жолоочид дахиж таны хүргэлтүүд харагдахгүй
-                      </span>
-                      .
+                      <span className="font-semibold">хүргээгүй</span> эсвэл холбогдохгүй бол та энэ товчийг ашиглаж болно. Ингэснээр{" "}
+                      <span className="font-semibold">энэ жолоочид дахиж таны хүргэлтүүд харагдахгүй</span>.
                     </div>
 
                     <div className="mt-2">
@@ -984,6 +1031,15 @@ export default function SellerDeliveryDetailPage() {
                 )}
               </div>
             )}
+
+            {/* MAP */}
+            <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+              <div className="border-b border-slate-200 px-4 py-3">
+                <div className="text-sm font-semibold text-slate-900">Газрын зураг</div>
+                <div className="mt-0.5 text-xs text-slate-500">Авах (цэнхэр) · Хүргэх (ногоон)</div>
+              </div>
+              <DeliveryRouteMap pickup={pickup} dropoff={dropoff} />
+            </div>
 
             {/* BIDS (OPEN only) */}
             {delivery.status === "OPEN" && (
