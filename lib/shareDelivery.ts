@@ -19,9 +19,24 @@ export function buildShareText(p: ShareDeliveryPayload) {
 }
 
 export function getPublicShareUrl(deliveryId: string) {
-  // window байхгүй үед (SSR) эвдрэхээс хамгаална
-  if (typeof window === "undefined") return `/share/delivery/${deliveryId}`;
-  return `${window.location.origin}/share/delivery/${deliveryId}`;
+  // ✅ FB crawler-д хамгийн чухал нь ABSOLUTE URL.
+  // 1) NEXT_PUBLIC_SITE_URL (production custom domain) хамгийн түрүүнд
+  // 2) NEXT_PUBLIC_VERCEL_URL (preview/prod auto domain) -> https://...
+  // 3) client дээр window.origin
+  const site = (process.env.NEXT_PUBLIC_SITE_URL || "").trim();
+  const vercel = (process.env.NEXT_PUBLIC_VERCEL_URL || "").trim();
+
+  const base =
+    site ||
+    (vercel
+      ? `https://${vercel}`
+      : typeof window !== "undefined"
+      ? window.location.origin
+      : "");
+
+  // SSR үед base хоосон байж болох тул relative fallback үлдээнэ
+  if (!base) return `/share/delivery/${deliveryId}`;
+  return `${base}/share/delivery/${deliveryId}`;
 }
 
 export async function copyToClipboard(text: string) {

@@ -45,9 +45,10 @@ async function fetchShareRow(id: string): Promise<ShareRow | null> {
 
 export async function GET(
   _req: Request,
-  { params }: { params: { id: string } } // ✅ PROMISE БИШ
+  // Next.js 15+ дээр route handler-ийн `params` нь Promise гэж typеддэг (Vercel build дээрх алдаа үүнээс болсон).
+  ctx: { params: Promise<{ id: string }> }
 ) {
-  const id = params.id;
+  const { id } = await ctx.params;
 
   const d = await fetchShareRow(id);
   const from = d ? areaLine(d.pickup_district, d.pickup_khoroo) : "—";
