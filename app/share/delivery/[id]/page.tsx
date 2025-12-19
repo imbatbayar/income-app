@@ -90,7 +90,11 @@ export async function generateMetadata({
     : "INCOME хүргэлт";
 
   // ✅ OG зураг руу заана
-  const og = `/api/og/delivery/${params.id}`;
+  const siteUrl =
+  process.env.NEXT_PUBLIC_SITE_URL?.trim() || "https://income.mn";
+
+  const og = `${siteUrl}/api/og/delivery/${params.id}`;
+
 
   return {
     title,
