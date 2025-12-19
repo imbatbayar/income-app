@@ -52,6 +52,11 @@ type DriverPublic = {
   name: string | null;
   phone: string | null;
   avatar_url?: string | null;
+
+  // ✅ optional bank fields (if your DB has them)
+  bank_iban?: string | null;
+  bank_account?: string | null;
+  bank_holder?: string | null;
 };
 
 type BidRow = {
@@ -82,12 +87,13 @@ function shorten(s: string | null, max = 90) {
   return t.slice(0, max).replace(/\s+$/, "") + "…";
 }
 
+// ✅ “1 хороо” гэж товчилж нэг мөрөнд гаргана (UI эвдэхгүй)
 function areaLine(district?: string | null, khoroo?: string | null) {
   const d = (district || "").trim();
   const k = (khoroo || "").trim();
-  if (d && k) return `${d} · ${k}`;
+  if (d && k) return `${d} ${k} хороо`;
   if (d) return d;
-  if (k) return k;
+  if (k) return `${k} хороо`;
   return "—";
 }
 
@@ -159,6 +165,9 @@ export default function SellerDeliveryDetailPage() {
   const [editTo, setEditTo] = useState("");
   const [editNote, setEditNote] = useState("");
   const [editPrice, setEditPrice] = useState<string>("");
+
+  // ✅ найдваргүй жолооч (loading)
+  const [unreliableLoading, setUnreliableLoading] = useState(false);
 
   useEffect(() => {
     if (!msg && !error) return;
@@ -300,13 +309,24 @@ export default function SellerDeliveryDetailPage() {
       else setBids((bidRows as any) || []);
 
       if (d.chosen_driver_id) {
-        const { data: du } = await supabase
+        // ✅ Try bank fields first (if columns exist). If not, fallback to minimal select.
+        const { data: du1, error: duErr1 } = await supabase
           .from("users")
-          .select("id,name,phone,avatar_url")
+          .select("id,name,phone,avatar_url,bank_iban,bank_account,bank_holder")
           .eq("id", d.chosen_driver_id)
           .maybeSingle();
 
-        setChosenDriver((du as any) || null);
+        if (!duErr1 && du1) {
+          setChosenDriver((du1 as any) || null);
+        } else {
+          const { data: du2 } = await supabase
+            .from("users")
+            .select("id,name,phone,avatar_url")
+            .eq("id", d.chosen_driver_id)
+            .maybeSingle();
+
+          setChosenDriver((du2 as any) || null);
+        }
       } else {
         setChosenDriver(null);
       }
@@ -487,6 +507,57 @@ export default function SellerDeliveryDetailPage() {
     }
   }
 
+  // ✅ Найдваргүй жолооч (Seller side)
+  async function markDriverUnreliable() {
+    if (!delivery || !user) return;
+    if (unreliableLoading) return;
+    if (delivery.status !== "ON_ROUTE") return;
+    if (!delivery.chosen_driver_id) return;
+
+    const ok = window.confirm(
+      "Жолоочийг 'Найдваргүй' гэж тэмдэглэх үү?\n\n" +
+        "- Энэ жолоочид дахиж таны хүргэлтүүд харагдахгүй.\n" +
+        "- Энэ хүргэлт дахин НЭЭЛТТЭЙ болж, та шинэ жолооч сонгоно."
+    );
+    if (!ok) return;
+
+    setUnreliableLoading(true);
+    setError(null);
+    setMsg(null);
+
+    try {
+      // 1) block driver for this seller
+      await supabase.from("seller_blocked_drivers").insert({
+        seller_id: user.id,
+        driver_id: delivery.chosen_driver_id,
+      });
+
+      // 2) reopen delivery (remove chosen driver)
+      const { data, error: e1 } = await supabase
+        .from("deliveries")
+        .update({
+          status: "OPEN",
+          chosen_driver_id: null,
+          // on_route_at: null, // (байхгүй байж магадгүй тул update хийхгүй)
+        })
+        .eq("id", delivery.id)
+        .eq("seller_id", user.id)
+        .eq("status", "ON_ROUTE")
+        .select("id,status,chosen_driver_id")
+        .maybeSingle();
+
+      if (e1) throw e1;
+
+      setMsg("Найдваргүй жолоочоор тэмдэглэлээ. Хүргэлт дахин нээлттэй боллоо.");
+      setTimeout(() => router.push("/seller?tab=OPEN"), 450);
+    } catch (e: any) {
+      console.error(e);
+      setError("Найдваргүй жолооч тэмдэглэхэд алдаа гарлаа.");
+    } finally {
+      setUnreliableLoading(false);
+    }
+  }
+
   function buildShareText(d: DeliveryDetail) {
     const from = d.from_address || "—";
     const to = d.to_address || "—";
@@ -513,8 +584,27 @@ export default function SellerDeliveryDetailPage() {
     try {
       const u = encodeURIComponent("https://income.mn");
       const quote = encodeURIComponent(text);
-      window.open(`https://www.facebook.com/sharer/sharer.php?u=${u}&quote=${quote}`, "_blank");
+      window.open(
+        `https://www.facebook.com/sharer/sharer.php?u=${u}&quote=${quote}`,
+        "_blank"
+      );
     } catch {}
+  }
+
+  // ✅ Payment helpers (DELIVERED дээр map-ийн ДЭЭР гарна)
+  const payIban = (chosenDriver?.bank_iban || "").trim();
+  const payAccount = (chosenDriver?.bank_account || "").trim();
+  const payHolder = (chosenDriver?.bank_holder || chosenDriver?.name || "").trim();
+  const payPurpose = delivery ? `INCOME-${delivery.id}` : "";
+
+  async function copyField(label: string, value: string) {
+    if (!value) {
+      setError(`${label} хоосон байна.`);
+      return;
+    }
+    const ok = await copyText(value);
+    if (ok) setMsg(`${label} хууллаа.`);
+    else setError("Clipboard зөвшөөрөлгүй байна. (Хуулах боломжгүй)");
   }
 
   if (loading) {
@@ -533,7 +623,7 @@ export default function SellerDeliveryDetailPage() {
 
   const b = delivery ? badge(delivery.status) : null;
 
-  // ✅ top route uses district/khoroo ONLY
+  // ✅ top route uses district/khoroo ONLY (now formatted as “1 хороо”)
   const topFrom = delivery ? areaLine(delivery.pickup_district, delivery.pickup_khoroo) : "—";
   const topTo = delivery ? areaLine(delivery.dropoff_district, delivery.dropoff_khoroo) : "—";
 
@@ -602,21 +692,43 @@ export default function SellerDeliveryDetailPage() {
                     </div>
                   )}
 
-                  {/* INFO / WARNING */}
-                  <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2">
-                    <div className="text-xs leading-relaxed text-slate-700">
-                      <span className="font-semibold">ℹ️ Анхаар:</span>{" "}
-                      Одоогоор энэ хэсэгт <span className="font-semibold">дүүрэг/хороо</span> л
-                      харагдана.
-                      <br />
-                      Жолооч <span className="font-semibold">сонгогдвол</span> таны (худалдагчийн){" "}
-                      <span className="font-semibold">хаяг, утас</span> жолоочид ил болно.
-                      <br />
-                      Жолооч <span className="font-semibold">барааг аваад “Замд”</span> орсон үед{" "}
-                      <span className="font-semibold">хүлээн авагчийн</span> (хүргэх){" "}
-                      <span className="font-semibold">дэлгэрэнгүй хаяг, утас</span> мөн ил болно.
+                  {/* ✅ ASSIGNED/ON_ROUTE үед — зөвхөн энэ анхааруулга */}
+                  {delivery.status === "ON_ROUTE" && (
+                    <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50/70 px-3 py-2">
+                      <div className="text-xs leading-relaxed text-amber-900">
+                        <span className="font-extrabold">Анхаар:</span> Одоо худалдан авагчийн{" "}
+                        <span className="font-semibold">хаяг, утас</span> жолоочид ил болсон. Та хүргэлтээ{" "}
+                        <span className="font-semibold">анхааралтай хянаарай</span>.
+                      </div>
                     </div>
-                  </div>
+                  )}
+
+                  {/* ✅ DELIVERED үед — ганц л анхааруулга */}
+                  {delivery.status === "DELIVERED" && (
+                    <div className="mt-3 rounded-2xl border border-emerald-200 bg-emerald-50/70 px-3 py-2">
+                      <div className="text-xs leading-relaxed text-emerald-900">
+                        <span className="font-extrabold">Мэдэгдэл:</span> Жолооч таны барааг амжилттай
+                        хүргэсэн байна.
+                      </div>
+                    </div>
+                  )}
+
+                  {/* ✅ INFO / WARNING — зөвхөн OPEN дээр */}
+                  {delivery.status === "OPEN" && (
+                    <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2">
+                      <div className="text-xs leading-relaxed text-slate-700">
+                        <span className="font-semibold">ℹ️ Анхаар:</span> Одоогоор энэ хэсэгт{" "}
+                        <span className="font-semibold">дүүрэг/хороо</span> л харагдана.
+                        <br />
+                        Жолооч <span className="font-semibold">сонгогдвол</span> таны (худалдагчийн){" "}
+                        <span className="font-semibold">хаяг, утас</span> жолоочид ил болно.
+                        <br />
+                        Жолооч <span className="font-semibold">барааг аваад “Замд”</span> орсон үед{" "}
+                        <span className="font-semibold">хүлээн авагчийн</span> (хүргэх){" "}
+                        <span className="font-semibold">дэлгэрэнгүй хаяг, утас</span> мөн ил болно.
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -710,15 +822,93 @@ export default function SellerDeliveryDetailPage() {
               )}
             </div>
 
+            {/* ✅ DELIVERED үед: Жолоочийн төлбөр (MAP-ийн ДЭЭР) */}
+            {delivery.status === "DELIVERED" && (
+              <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                <div className="text-sm font-semibold text-slate-900">
+                  Хүргэлт хийсэн үнэн бол та доорх данс руу жолоочийн төлбөрийг шилжүүлээрэй.
+                </div>
+                <div className="mt-1 text-xs text-slate-500">
+                  Гүйлгээний утга дээр <span className="font-semibold">INCOME-{delivery.id}</span> гэж бичвэл
+                  амар.
+                </div>
+
+                <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50 p-3">
+                  <div className="grid gap-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="text-[11px] font-semibold text-slate-600">IBAN</div>
+                        <div className="truncate text-sm font-extrabold text-slate-900">
+                          {payIban || "—"}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => void copyField("IBAN", payIban)}
+                        className="shrink-0 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900 hover:border-slate-300 disabled:opacity-60"
+                        disabled={!payIban}
+                        title="Хуулах"
+                      >
+                        💾
+                      </button>
+                    </div>
+
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="text-[11px] font-semibold text-slate-600">Данс</div>
+                        <div className="truncate text-sm font-extrabold text-slate-900">
+                          {payAccount || "—"}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => void copyField("Данс", payAccount)}
+                        className="shrink-0 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900 hover:border-slate-300 disabled:opacity-60"
+                        disabled={!payAccount}
+                        title="Хуулах"
+                      >
+                        💾
+                      </button>
+                    </div>
+
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="text-[11px] font-semibold text-slate-600">Утга</div>
+                        <div className="truncate text-sm font-extrabold text-slate-900">
+                          {payPurpose}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => void copyField("Утга", payPurpose)}
+                        className="shrink-0 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900 hover:border-slate-300 disabled:opacity-60"
+                        title="Хуулах"
+                      >
+                        💾
+                      </button>
+                    </div>
+
+                    <div className="pt-1 text-xs text-slate-600">
+                      <span className="font-semibold">Хүлээн авагч:</span> {payHolder || "—"}
+                    </div>
+
+                    {!payIban && !payAccount && (
+                      <div className="pt-1 text-xs text-amber-700">
+                        Жолооч дансны мэдээллээ оруулаагүй байна. (Данс/IBAN байхгүй)
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* MAP */}
             <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
               <div className="border-b border-slate-200 px-4 py-3">
                 <div className="text-sm font-semibold text-slate-900">Газрын зураг</div>
-                <div className="mt-0.5 text-xs text-slate-500">
-                  Авах (цэнхэр) · Хүргэх (ногоон)
-                </div>
+                <div className="mt-0.5 text-xs text-slate-500">Авах (цэнхэр) · Хүргэх (ногоон)</div>
               </div>
-              <DeliveryRouteMap pickup={pickup} dropoff={dropoff} height={240} />
+              <DeliveryRouteMap pickup={pickup} dropoff={dropoff} />
             </div>
 
             {/* CHOSEN DRIVER */}
@@ -760,6 +950,38 @@ export default function SellerDeliveryDetailPage() {
                     )}
                   </div>
                 </div>
+
+                {/* ✅ ON_ROUTE үед: жолоочийн доор найдваргүй товч + анхааруулга */}
+                {delivery.status === "ON_ROUTE" && (
+                  <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2">
+                    <div className="text-xs leading-relaxed text-slate-700">
+                      Жолооч <span className="font-semibold">хэт удсан</span>, барааг{" "}
+                      <span className="font-semibold">хүргээгүй</span> эсвэл холбогдохгүй бол та энэ
+                      товчийг ашиглаж болно. Ингэснээр{" "}
+                      <span className="font-semibold">
+                        энэ жолоочид дахиж таны хүргэлтүүд харагдахгүй
+                      </span>
+                      .
+                    </div>
+
+                    <div className="mt-2">
+                      <button
+                        type="button"
+                        onClick={() => void markDriverUnreliable()}
+                        disabled={unreliableLoading}
+                        className={[
+                          "rounded-xl px-4 py-2 text-sm font-semibold",
+                          "border border-slate-200 bg-white",
+                          "text-rose-700 hover:bg-rose-50 hover:border-rose-200",
+                          "disabled:opacity-60",
+                        ].join(" ")}
+                        title="Жолооч алга болсон/хэт удааширсан үед"
+                      >
+                        {unreliableLoading ? "Тэмдэглэж байна…" : "Найдваргүй жолооч"}
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
@@ -776,9 +998,7 @@ export default function SellerDeliveryDetailPage() {
                 {loadingBids ? (
                   <div className="mt-3 text-sm text-slate-600">Ачаалж байна…</div>
                 ) : bids.length === 0 ? (
-                  <div className="mt-3 text-sm text-slate-600">
-                    Одоогоор хүсэлт ирээгүй байна.
-                  </div>
+                  <div className="mt-3 text-sm text-slate-600">Одоогоор хүсэлт ирээгүй байна.</div>
                 ) : (
                   <div className="mt-3 space-y-2">
                     {bids.map((bid) => (

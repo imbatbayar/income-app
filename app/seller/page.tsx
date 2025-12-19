@@ -42,7 +42,7 @@ type DeliveryRow = {
   seller_hidden: boolean;
   bid_count?: number;
 
-  // ✅ шинэ: замд гарсан мөч
+  // ✅ замд гарсан мөч
   on_route_at?: string | null;
 };
 
@@ -94,13 +94,28 @@ function badge(status: DeliveryStatus) {
   }
 }
 
-function routeHours(onRouteAt?: string | null) {
+// ✅ hh:mm (амьд тоологдоно)
+function routeHHMM(onRouteAt?: string | null) {
+  if (!onRouteAt) return "00:00";
+  const t = new Date(onRouteAt).getTime();
+  if (!Number.isFinite(t)) return "00:00";
+  const ms = Date.now() - t;
+  if (ms <= 0) return "00:00";
+
+  const totalMin = Math.floor(ms / 60000);
+  const hh = String(Math.floor(totalMin / 60)).padStart(2, "0");
+  const mm = String(totalMin % 60).padStart(2, "0");
+  return `${hh}:${mm}`;
+}
+
+// ✅ late шалгахын тулд (3+ цаг гэх мэт)
+function routeTotalHours(onRouteAt?: string | null) {
   if (!onRouteAt) return 0;
   const t = new Date(onRouteAt).getTime();
   if (!Number.isFinite(t)) return 0;
   const ms = Date.now() - t;
   if (ms <= 0) return 0;
-  return Math.floor(ms / 3600000); // ✅ 1 цагийн алхам
+  return ms / 3600000;
 }
 
 function Pill({
@@ -168,6 +183,9 @@ export default function SellerDashboardPage() {
 
   const [actLoading, setActLoading] = useState<Record<string, boolean>>({});
 
+  // ✅ ON_ROUTE үед амьд тоолуур шинэчлүүлэх tick
+  const [tick, setTick] = useState(0);
+
   // ✅ Таб нэрийг яг хүссэнээр солих (UI эвдэхгүйгээр)
   const SELLER_TABS_UI = useMemo(() => {
     return SELLER_TABS.map((t) =>
@@ -205,6 +223,13 @@ export default function SellerDashboardPage() {
     localStorage.setItem("sellerActiveTab", tab);
     router.replace(`/seller?tab=${tab}`);
   }
+
+  // ✅ зөвхөн ON_ROUTE таб дээр 30 сек тутам амьд тоологдох re-render
+  useEffect(() => {
+    if (activeTab !== "ON_ROUTE") return;
+    const t = setInterval(() => setTick((v) => v + 1), 30 * 1000);
+    return () => clearInterval(t);
+  }, [activeTab]);
 
   useEffect(() => {
     if (!user) return;
@@ -282,6 +307,7 @@ export default function SellerDashboardPage() {
 
   // ✅ ON_ROUTE үед: хамгийн удаж байгаа нь дээр (on_route_at хамгийн эрт)
   const sorted = useMemo(() => {
+    // tick ашигласнаар ON_ROUTE дээр хугацаа амьд шинэчлэгдэнэ
     if (activeTab !== "ON_ROUTE") return filtered;
 
     const copy = [...filtered];
@@ -289,14 +315,13 @@ export default function SellerDashboardPage() {
       const ta = a.on_route_at ? new Date(a.on_route_at).getTime() : 0;
       const tb = b.on_route_at ? new Date(b.on_route_at).getTime() : 0;
 
-      // on_route_at байхгүй нь доошоо
       if (!ta && tb) return 1;
       if (ta && !tb) return -1;
 
       return ta - tb;
     });
     return copy;
-  }, [filtered, activeTab]);
+  }, [filtered, activeTab, tick]);
 
   const tabCounts = useMemo(() => {
     const m: Record<SellerTabId, number> = {
@@ -547,8 +572,9 @@ export default function SellerDashboardPage() {
     const fromArea = areaLine(d.pickup_district, d.pickup_khoroo);
     const toArea = areaLine(d.dropoff_district, d.dropoff_khoroo);
 
-    const h = d.status === "ON_ROUTE" ? routeHours(d.on_route_at) : 0;
-    const isLate = d.status === "ON_ROUTE" && h >= 3;
+    const hhmm = d.status === "ON_ROUTE" ? routeHHMM(d.on_route_at) : "00:00";
+    const hours = d.status === "ON_ROUTE" ? routeTotalHours(d.on_route_at) : 0;
+    const isLate = d.status === "ON_ROUTE" && hours >= 3;
 
     return (
       <div className="rounded-2xl border border-slate-200 bg-white p-4">
@@ -561,7 +587,7 @@ export default function SellerDashboardPage() {
                 {b.text}
               </span>
 
-              {/* ✅ ON_ROUTE дээр цаг */}
+              {/* ✅ ON_ROUTE дээр цаг:минут */}
               {d.status === "ON_ROUTE" && (
                 <span
                   className={[
@@ -572,7 +598,7 @@ export default function SellerDashboardPage() {
                   ].join(" ")}
                   title="Замд гарснаас хойш"
                 >
-                  ⏱ {h} цаг
+                  ⏱ {hhmm}
                 </span>
               )}
             </div>
@@ -622,7 +648,7 @@ export default function SellerDashboardPage() {
                     : "bg-slate-900 hover:bg-slate-800",
                 ].join(" ")}
               >
-                Устгах
+                del🗑️
               </button>
             )}
           </div>
