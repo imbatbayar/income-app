@@ -43,13 +43,18 @@ async function fetchShareRow(id: string): Promise<ShareRow | null> {
   return data?.[0] ?? null;
 }
 
-export async function GET(
-  _req: Request,
-  { params }: { params: { id: string } }
-) {
-  const id = params.id;
+// ✅ Next/Vercel params нь Promise ч байж магадгүй тул runtime-safe уншина
+export async function GET(_req: Request, context: any) {
+  const rawParams = context?.params;
 
-  const d = await fetchShareRow(id);
+  const resolvedParams =
+    rawParams && typeof rawParams.then === "function"
+      ? await rawParams
+      : rawParams;
+
+  const id: string | undefined = resolvedParams?.id;
+
+  const d = id ? await fetchShareRow(id) : null;
   const from = d ? areaLine(d.pickup_district, d.pickup_khoroo) : "—";
   const to = d ? areaLine(d.dropoff_district, d.dropoff_khoroo) : "—";
 
