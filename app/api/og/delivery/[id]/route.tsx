@@ -43,14 +43,20 @@ async function fetchShareRow(id: string): Promise<ShareRow | null> {
   return data?.[0] ?? null;
 }
 
-// ✅ Next 16 typegen шаардлага: params нь Promise байна
-export async function GET(
-  _req: Request,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const { id } = await params;
+// ✅ Vercel/Next type mismatch-ийг “param typing”-оор биш, runtime-safe уншилтаар шийднэ
+export async function GET(_req: Request, context: any) {
+  const rawParams = context?.params;
 
-  const d = await fetchShareRow(id);
+  // params нь object ч байж магадгүй, Promise ч байж магадгүй
+  const resolvedParams =
+    rawParams && typeof rawParams.then === "function"
+      ? await rawParams
+      : rawParams;
+
+  const id: string | undefined = resolvedParams?.id;
+
+  const d = id ? await fetchShareRow(id) : null;
+
   const from = d ? areaLine(d.pickup_district, d.pickup_khoroo) : "—";
   const to = d ? areaLine(d.dropoff_district, d.dropoff_khoroo) : "—";
 
