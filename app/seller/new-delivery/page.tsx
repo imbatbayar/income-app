@@ -82,32 +82,54 @@ async function geocodeTryMany(queries: string[]) {
   return null;
 }
 
-type DotColor = "green" | "red" | "orange";
-
-function circleIcon(color: DotColor) {
-  const fill =
-    color === "green" ? "#10b981" : color === "red" ? "#ef4444" : "#f59e0b"; // ✅ orange
-  const stroke =
-    color === "green" ? "#065f46" : color === "red" ? "#7f1d1d" : "#92400e"; // ✅ orange stroke
-
-  return L.divIcon({
-    className: "",
-    html: `<div style="
-      width:16px;height:16px;border-radius:999px;
-      background:${fill}; border:2px solid ${stroke};
-      box-shadow:0 2px 10px rgba(0,0,0,.18);
-    "></div>`,
-    iconSize: [16, 16],
-    iconAnchor: [8, 8],
-  });
-}
-
 function normalizeKhorooLabel(k: string) {
   const s = String(k || "").trim();
   if (!s) return "";
   if (/^\d+$/.test(s)) return `${s}-р хороо`;
   if (s.includes("хороо")) return s;
   return `${s}-р хороо`;
+}
+
+/**
+ * ✅ Яг апп шиг icon-ууд
+ * - АВАХ: 📦 (LOCK үед ногоон, EDIT үед улаан)
+ * - ХҮРГЭХ: 👋
+ */
+function mapEmojiIcon(kind: "pickupLocked" | "pickupEdit" | "dropoff") {
+  const html =
+    kind === "dropoff"
+      ? `<div style="
+          width:34px;height:34px;border-radius:12px;
+          background:#111827;color:#fff;
+          display:flex;align-items:center;justify-content:center;
+          font-size:18px;
+          border:2px solid rgba(255,255,255,.75);
+          box-shadow:0 6px 18px rgba(0,0,0,.22);
+        ">👋</div>`
+      : kind === "pickupEdit"
+      ? `<div style="
+          width:34px;height:34px;border-radius:12px;
+          background:#ef4444;color:#fff;
+          display:flex;align-items:center;justify-content:center;
+          font-size:18px;
+          border:2px solid rgba(255,255,255,.75);
+          box-shadow:0 6px 18px rgba(0,0,0,.22);
+        ">📦</div>`
+      : `<div style="
+          width:34px;height:34px;border-radius:12px;
+          background:#10b981;color:#052e1b;
+          display:flex;align-items:center;justify-content:center;
+          font-size:18px;
+          border:2px solid rgba(255,255,255,.75);
+          box-shadow:0 6px 18px rgba(0,0,0,.22);
+        ">📦</div>`;
+
+  return L.divIcon({
+    className: "",
+    html,
+    iconSize: [34, 34],
+    iconAnchor: [17, 17],
+  });
 }
 
 const LeafletMap = dynamic(
@@ -172,7 +194,7 @@ const LeafletMap = dynamic(
             <Marker
               position={[pickup!.lat, pickup!.lng]}
               draggable={!pickupLocked}
-              icon={circleIcon(pickupLocked ? "orange" : "green")} // ✅ түгжсэн үед orange
+              icon={mapEmojiIcon(pickupLocked ? "pickupLocked" : "pickupEdit")}
               eventHandlers={{
                 dragend: (e: any) => {
                   const ll = e.target.getLatLng();
@@ -186,7 +208,7 @@ const LeafletMap = dynamic(
             <Marker
               position={[dropoff!.lat, dropoff!.lng]}
               draggable
-              icon={circleIcon("red")}
+              icon={mapEmojiIcon("dropoff")}
               eventHandlers={{
                 dragend: (e: any) => {
                   const ll = e.target.getLatLng();
@@ -217,6 +239,50 @@ const LeafletMap = dynamic(
   },
   { ssr: false }
 );
+
+function SoftInput(props: React.InputHTMLAttributes<HTMLInputElement>) {
+  return (
+    <input
+      {...props}
+      className={[
+        "w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm",
+        "placeholder:text-slate-400",
+        "focus:outline-none focus:ring-2 focus:ring-emerald-200/70 focus:border-emerald-300",
+        props.className || "",
+      ].join(" ")}
+    />
+  );
+}
+
+function SoftTextArea(
+  props: React.TextareaHTMLAttributes<HTMLTextAreaElement>
+) {
+  return (
+    <textarea
+      {...props}
+      className={[
+        "w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm",
+        "placeholder:text-slate-400",
+        "focus:outline-none focus:ring-2 focus:ring-emerald-200/70 focus:border-emerald-300",
+        props.className || "",
+      ].join(" ")}
+    />
+  );
+}
+
+function SoftSelect(props: React.SelectHTMLAttributes<HTMLSelectElement>) {
+  return (
+    <select
+      {...props}
+      className={[
+        "w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm",
+        "focus:outline-none focus:ring-2 focus:ring-emerald-200/70 focus:border-emerald-300",
+        "disabled:opacity-60",
+        props.className || "",
+      ].join(" ")}
+    />
+  );
+}
 
 export default function NewDeliveryPage() {
   const router = useRouter();
@@ -277,33 +343,6 @@ export default function NewDeliveryPage() {
       !isNaN(Number(price))
   );
 
-  // ✅ Түгжих/Засах
-  // - Түгжих үед 🟢 цэг байхгүй бол centroid тавиад шууд хадгална (ингээд "үргэлж харагдана")
-  function togglePickupLock() {
-    setPickupLocked((v) => {
-      const next = !v; // true => түгжих
-
-      if (next) {
-        let p = pickup;
-
-        if (!isValidLatLng(p)) {
-          const fb = UB_DISTRICT_CENTROIDS[pickupDistrict];
-          if (fb) {
-            p = fb;
-            setPickup(fb); // ✅ map дээр шууд харагдана
-          }
-        }
-
-        if (isValidLatLng(p)) {
-          window.localStorage.setItem("incomeLastPickupLat", String(p!.lat));
-          window.localStorage.setItem("incomeLastPickupLng", String(p!.lng));
-        }
-      }
-
-      return next;
-    });
-  }
-
   function buildPickupQueries() {
     const kh = normalizeKhorooLabel(pickupKhoroo);
     const extra = fromAddress.trim();
@@ -334,6 +373,35 @@ export default function NewDeliveryPage() {
     const q4 = `Ulaanbaatar, ${dropoffDistrict} district, Mongolia`;
 
     return [q1, q2, q3, q4];
+  }
+
+  // ✅ LOCK/EDIT товч:
+  // - LOCK дээр “Засах”
+  // - EDIT дээр “Хадгалах”
+  function togglePickupEdit() {
+    setPickupLocked((locked) => {
+      const nextLocked = !locked;
+
+      // Хадгалах (edit -> lock) үед: pickup байхгүй бол centroid тавина
+      if (nextLocked) {
+        let p = pickup;
+
+        if (!isValidLatLng(p)) {
+          const fb = UB_DISTRICT_CENTROIDS[pickupDistrict];
+          if (fb) {
+            p = fb;
+            setPickup(fb);
+          }
+        }
+
+        if (isValidLatLng(p)) {
+          window.localStorage.setItem("incomeLastPickupLat", String(p!.lat));
+          window.localStorage.setItem("incomeLastPickupLng", String(p!.lng));
+        }
+      }
+
+      return nextLocked;
+    });
   }
 
   useEffect(() => {
@@ -379,10 +447,9 @@ export default function NewDeliveryPage() {
     }
   }, [router]);
 
-  // ✅ ЭНЭ ХЭСЭГ ЧИНЬ 🟢-г УСТГААД БАЙСАН.
-  // Түгжсэн үед огт устгахгүй.
+  // ✅ Pickup засаж буй үед дүүрэг солигдвол хороо/цэгийг цэвэрлэнэ
   useEffect(() => {
-    if (pickupLocked) return; // ✅
+    if (pickupLocked) return;
     setPickupKhoroo("");
     setPickup(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -394,6 +461,7 @@ export default function NewDeliveryPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dropoffDistrict]);
 
+  // ✅ Автомат geocode (pickup зөвхөн EDIT үед)
   useEffect(() => {
     let canceled = false;
     const run = async () => {
@@ -450,14 +518,9 @@ export default function NewDeliveryPage() {
         const fb = UB_DISTRICT_CENTROIDS[pickupDistrict];
         if (fb) {
           setPickup(fb);
-          setError(
-            "Хаягаар олдсонгүй — дүүргийн ойролцоо 🟢 цэг тавилаа. Чирж ягштал тааруулна уу."
-          );
-          return;
+          return setError("АВАХ хаяг олдсонгүй. Цэгийг чирж тааруулна уу.");
         }
-        return setError(
-          "АВАХ байрлал олдсонгүй. Дэлгэрэнгүйг (гудамж/байр/тоот) нэмээд дахин хайна уу."
-        );
+        return setError("АВАХ байрлал олдсонгүй.");
       }
 
       setPickup(p);
@@ -484,14 +547,9 @@ export default function NewDeliveryPage() {
         const fb = UB_DISTRICT_CENTROIDS[dropoffDistrict];
         if (fb) {
           setDropoff(fb);
-          setError(
-            "Хаягаар олдсонгүй — дүүргийн ойролцоо 🔴 цэг тавилаа. Чирж ягштал тааруулна уу."
-          );
-          return;
+          return setError("ХҮРГЭХ хаяг олдсонгүй. Цэгийг чирж тааруулна уу.");
         }
-        return setError(
-          "ХҮРГЭХ байрлал олдсонгүй. Дэлгэрэнгүйг (гудамж/байр/тоот) нэмээд дахин хайна уу."
-        );
+        return setError("ХҮРГЭХ байрлал олдсонгүй.");
       }
 
       setDropoff(p);
@@ -551,9 +609,7 @@ export default function NewDeliveryPage() {
 
       if (!hasPick || !hasDrop) {
         setSending(false);
-        setError(
-          "Map дээр 🟠/🔴 цэгээ байрлуулаад (эсвэл Хайх дарж) дахин илгээнэ үү."
-        );
+        setError("Map дээр цэгүүдээ байрлуулаад дахин илгээнэ үү.");
         return;
       }
 
@@ -616,6 +672,9 @@ export default function NewDeliveryPage() {
     return ubCenter;
   }, [pickup, dropoff, ubCenter]);
 
+  // ✅ pickup card disabled style
+  const pickupCardDisabled = pickupLocked;
+
   if (loadingUser) {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center">
@@ -634,56 +693,69 @@ export default function NewDeliveryPage() {
 
   return (
     <div className="min-h-screen bg-slate-50">
+      {/* Header */}
       <header className="border-b border-slate-200 bg-white">
-        <div className="max-w-3xl mx-auto px-4 py-4">
-          <div className="flex items-center gap-3">
-            <div className="inline-flex items-center justify-center rounded-full bg-emerald-50 px-3 py-1">
-              <span className="text-xs font-semibold text-emerald-700">
-                INCOME
-              </span>
-            </div>
+        <div className="max-w-3xl mx-auto px-4 py-5">
+          <div className="flex items-start justify-between gap-3">
             <div>
-              <h1 className="text-sm font-semibold text-slate-900">
-                Хүргэлт үүсгэх
-              </h1>
-              <p className="text-xs text-slate-500">
-                Авах/Хүргэх мэдээллээ нэг дор бөглөнө.
-              </p>
+              <div className="text-xs font-semibold text-slate-500">
+                INCOME · Seller
+              </div>
+              <div className="text-2xl font-extrabold tracking-tight text-slate-900">
+                + Шинэ хүргэлт
+              </div>
+              <div className="mt-1 text-xs text-slate-500">
+                Товч бөглөөд шууд үүсгэнэ.
+              </div>
             </div>
+
+            <button
+              onClick={() => router.push("/seller")}
+              className="shrink-0 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:border-slate-300"
+            >
+              ← Буцах
+            </button>
           </div>
 
-          <button
-            onClick={() => router.push("/seller")}
-            className="mt-3 text-xs px-3 py-1.5 rounded-full border border-slate-200 text-slate-600 hover:bg-slate-50"
-          >
-            ← Буцах
-          </button>
+          {error && (
+            <div className="mt-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+              {error}
+            </div>
+          )}
+          {success && (
+            <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50/70 px-4 py-3 text-sm text-emerald-700">
+              Хүргэлт амжилттай үүсгэгдлээ!
+            </div>
+          )}
         </div>
       </header>
 
-      <main className="max-w-3xl mx-auto px-4 py-6 space-y-5">
-        {error && (
-          <div className="text-xs text-red-600 bg-red-50 border border-red-100 rounded-xl px-3 py-2">
-            {error}
-          </div>
-        )}
-
-        {success && (
-          <div className="text-xs text-emerald-600 bg-emerald-50 border border-emerald-100 rounded-xl px-3 py-2">
-            Хүргэлт амжилттай үүсгэгдлээ!
-          </div>
-        )}
-
+      <main className="max-w-3xl mx-auto px-4 py-6 space-y-4">
         {/* Map */}
-        <div className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
-          <div className="mb-2 flex items-center justify-between gap-2">
-            <div className="text-sm font-semibold text-slate-900">Map</div>
-            <div className="text-[11px] text-slate-500">
-              🟠 авах (түгжсэн) · 🟢 авах (засаж буй) · 🔴 хүргэх
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <div className="text-sm font-semibold text-slate-900">
+                Газрын зураг
+              </div>
             </div>
+
+            <button
+              type="button"
+              onClick={togglePickupEdit}
+              className={[
+                "rounded-xl border px-3 py-2 text-xs font-semibold",
+                pickupLocked
+                  ? "border-slate-200 bg-white text-slate-800 hover:border-slate-300"
+                  : "border-red-200 bg-red-50 text-red-900 hover:bg-red-100/70",
+              ].join(" ")}
+              title={pickupLocked ? "АВАХ-ыг засах" : "АВАХ-ыг хадгалах"}
+            >
+              {pickupLocked ? "Засах" : "Хадгалах"}
+            </button>
           </div>
 
-          <div className="h-[320px] w-full overflow-hidden rounded-2xl border border-slate-200">
+          <div className="mt-3 h-[300px] w-full overflow-hidden rounded-2xl border border-slate-200">
             <LeafletMap
               center={mapCenter}
               pickup={pickup}
@@ -693,157 +765,133 @@ export default function NewDeliveryPage() {
               onDropoffChange={setDropoff}
             />
           </div>
-
-          <div className="mt-3 grid gap-2 md:grid-cols-2">
-            <div className="rounded-xl border border-amber-100 bg-amber-50 px-3 py-2">
-              <div className="text-[11px] text-amber-700/80">
-                🟠 Авах цэг {pickupLocked ? "(түгжсэн)" : "(засаж буй)"}
-              </div>
-              <div className="text-xs font-semibold text-amber-900">
-                {isValidLatLng(pickup)
-                  ? `${pickup!.lat.toFixed(5)}, ${pickup!.lng.toFixed(5)}`
-                  : "Тохируулаагүй"}
-              </div>
-            </div>
-
-            <div className="rounded-xl border border-rose-100 bg-rose-50 px-3 py-2">
-              <div className="text-[11px] text-rose-700/80">🔴 Хүргэх цэг</div>
-              <div className="text-xs font-semibold text-rose-900">
-                {isValidLatLng(dropoff)
-                  ? `${dropoff!.lat.toFixed(5)}, ${dropoff!.lng.toFixed(5)}`
-                  : "Тохируулаагүй"}
-              </div>
-            </div>
-          </div>
         </div>
 
-        {/* Доорх form чинь өмнөхтэй яг адил — өөрчлөхгүй үлдээлээ */}
-        <form onSubmit={handleSubmit} className="space-y-5">
-          {/* ... (чиний өмнөх form хэсгүүд хэвээрээ) ... */}
-          {/* Чиний upload файл дахь үлдсэн хэсэг өөрчлөгдөөгүй гэж үзээд орхисонгүй — 
-              Гэхдээ энэ paste нь бүтэн файл тул эндээс цааш код чинь үргэлжилнэ. */}
-
-          {/* ===================== АВАХ (НЭГ ДОР) ===================== */}
-          <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm space-y-3">
+        <form onSubmit={handleSubmit} className="space-y-4">
+          {/* Pickup (disabled when locked) */}
+          <div
+            className={[
+              "rounded-2xl border border-slate-200 bg-white p-4 shadow-sm",
+              pickupCardDisabled ? "opacity-60" : "",
+            ].join(" ")}
+          >
             <div className="flex items-center justify-between">
-              <div className="text-sm font-semibold text-slate-900">
-                АВАХ мэдээлэл
-              </div>
+              <div className="text-sm font-semibold text-slate-900">АВАХ</div>
+
               <button
                 type="button"
-                onClick={togglePickupLock}
-                className="text-xs px-3 py-1.5 rounded-full border border-slate-200 text-slate-700 hover:bg-slate-50"
+                onClick={() => void handleGeocodeFrom()}
+                disabled={geoLoadingFrom || pickupLocked}
+                className={[
+                  "rounded-xl border px-3 py-2 text-xs font-semibold",
+                  geoLoadingFrom || pickupLocked
+                    ? "border-slate-200 bg-slate-100 text-slate-500"
+                    : "border-emerald-200 bg-emerald-50/70 text-emerald-900 hover:bg-emerald-100/70",
+                ].join(" ")}
+                title="АВАХ хаягаар ойролцоо цэг хайх"
               >
-                {pickupLocked ? "Засах" : "Түгжих"}
+                {geoLoadingFrom ? "Хайж байна…" : "Хаягаар хайх"}
               </button>
             </div>
 
-            <div className="grid gap-3 md:grid-cols-2">
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-slate-800">
-                  АВАХ дүүрэг
-                </label>
-                <select
-                  value={pickupDistrict}
-                  onChange={(e) => setPickupDistrict(e.target.value)}
-                  disabled={pickupLocked}
-                  className="w-full border border-slate-300 rounded-xl px-3 py-2 text-sm disabled:opacity-60"
-                >
-                  <option value="">Сонгох</option>
-                  {districtOptions.map((o) => (
-                    <option key={o.value} value={o.value}>
-                      {o.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-slate-800">
-                  АВАХ хороо
-                </label>
-                <select
-                  value={pickupKhoroo}
-                  onChange={(e) => setPickupKhoroo(e.target.value)}
-                  disabled={pickupLocked || !pickupDistrict}
-                  className="w-full border border-slate-300 rounded-xl px-3 py-2 text-sm disabled:opacity-60"
-                >
-                  <option value="">Сонгох</option>
-                  {pickupKhorooOptions.map((o) => (
-                    <option key={o.value} value={o.value}>
-                      {o.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-
-            <div className="grid gap-3 md:grid-cols-2">
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-slate-800">
-                  АВАХ утас (заавал)
-                </label>
-                <input
-                  type="text"
-                  className="w-full border border-slate-300 rounded-xl px-3 py-2 text-sm disabled:opacity-60"
-                  placeholder="Ж: 9911XXXX"
-                  value={pickupPhone}
-                  onChange={(e) => setPickupPhone(e.target.value)}
-                  disabled={pickupLocked}
-                />
-              </div>
-
-              <div className="flex items-end">
-                {pickupLocked ? (
-                  <div className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-500 text-center">
-                    🟠 Авах цэг түгжигдсэн
+            <div
+              className={pickupLocked ? "pointer-events-none select-none" : ""}
+            >
+              <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                <div>
+                  <div className="text-[11px] font-semibold text-slate-500">
+                    Дүүрэг (заавал)
                   </div>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={handleGeocodeFrom}
-                    disabled={geoLoadingFrom || !pickupDistrict || !pickupKhoroo}
-                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:border-slate-300 disabled:opacity-60"
+                  <SoftSelect
+                    value={pickupDistrict}
+                    onChange={(e) => setPickupDistrict(e.target.value)}
+                    disabled={pickupLocked}
                   >
-                    {geoLoadingFrom ? "..." : "🟢 Авах цэг хайх"}
-                  </button>
-                )}
-              </div>
-            </div>
+                    <option value="">Сонгох</option>
+                    {districtOptions.map((o) => (
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </SoftSelect>
+                </div>
 
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-slate-800">
-                АВАХ хаяг (дэлгэрэнгүй)
-              </label>
-              <input
-                type="text"
-                className="w-full border border-slate-300 rounded-xl px-3 py-2 text-sm disabled:opacity-60"
-                placeholder="Ж: Гудамж, байр, тоот, орц, код, давхар…"
-                value={fromAddress}
-                onChange={(e) => setFromAddress(e.target.value)}
-                disabled={pickupLocked}
-              />
-              <p className="text-[11px] text-slate-400">
-                Байнгын бол “Түгжих” дээр үлдээнэ. Хүсвэл “Засах” дарж өөрчилнө.
-              </p>
+                <div>
+                  <div className="text-[11px] font-semibold text-slate-500">
+                    Хороо (заавал)
+                  </div>
+                  <SoftSelect
+                    value={pickupKhoroo}
+                    onChange={(e) => setPickupKhoroo(e.target.value)}
+                    disabled={pickupLocked || !pickupDistrict}
+                  >
+                    <option value="">Сонгох</option>
+                    {pickupKhorooOptions.map((o) => (
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </SoftSelect>
+                </div>
+              </div>
+
+              <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                <div>
+                  <div className="text-[11px] font-semibold text-slate-500">
+                    Утас (заавал)
+                  </div>
+                  <SoftInput
+                    placeholder="Ж: 9911XXXX"
+                    value={pickupPhone}
+                    onChange={(e) => setPickupPhone(e.target.value)}
+                    disabled={pickupLocked}
+                  />
+                </div>
+
+                <div>
+                  <div className="text-[11px] font-semibold text-slate-500">
+                    Дэлгэрэнгүй хаяг (сонголт)
+                  </div>
+                  <SoftInput
+                    placeholder="Гудамж, байр, тоот…"
+                    value={fromAddress}
+                    onChange={(e) => setFromAddress(e.target.value)}
+                    disabled={pickupLocked}
+                  />
+                </div>
+              </div>
             </div>
           </div>
 
-          {/* ===================== ХҮРГЭХ (НЭГ ДОР) ===================== */}
-          <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm space-y-3">
-            <div className="text-sm font-semibold text-slate-900">
-              ХҮРГЭХ мэдээлэл
+          {/* Dropoff */}
+          <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+            <div className="flex items-center justify-between">
+              <div className="text-sm font-semibold text-slate-900">ХҮРГЭХ</div>
+
+              <button
+                type="button"
+                onClick={() => void handleGeocodeTo()}
+                disabled={geoLoadingTo}
+                className={[
+                  "rounded-xl border px-3 py-2 text-xs font-semibold",
+                  geoLoadingTo
+                    ? "border-slate-200 bg-slate-100 text-slate-500"
+                    : "border-emerald-200 bg-emerald-50/70 text-emerald-900 hover:bg-emerald-100/70",
+                ].join(" ")}
+                title="ХҮРГЭХ хаягаар ойролцоо цэг хайх"
+              >
+                {geoLoadingTo ? "Хайж байна…" : "Хаягаар хайх"}
+              </button>
             </div>
 
-            <div className="grid gap-3 md:grid-cols-2">
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-slate-800">
-                  ХҮРГЭХ дүүрэг
-                </label>
-                <select
+            <div className="mt-3 grid gap-3 sm:grid-cols-2">
+              <div>
+                <div className="text-[11px] font-semibold text-slate-500">
+                  Дүүрэг (заавал)
+                </div>
+                <SoftSelect
                   value={dropoffDistrict}
                   onChange={(e) => setDropoffDistrict(e.target.value)}
-                  className="w-full border border-slate-300 rounded-xl px-3 py-2 text-sm"
                 >
                   <option value="">Сонгох</option>
                   {districtOptions.map((o) => (
@@ -851,18 +899,17 @@ export default function NewDeliveryPage() {
                       {o.label}
                     </option>
                   ))}
-                </select>
+                </SoftSelect>
               </div>
 
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-slate-800">
-                  ХҮРГЭХ хороо
-                </label>
-                <select
+              <div>
+                <div className="text-[11px] font-semibold text-slate-500">
+                  Хороо (заавал)
+                </div>
+                <SoftSelect
                   value={dropoffKhoroo}
                   onChange={(e) => setDropoffKhoroo(e.target.value)}
                   disabled={!dropoffDistrict}
-                  className="w-full border border-slate-300 rounded-xl px-3 py-2 text-sm disabled:opacity-60"
                 >
                   <option value="">Сонгох</option>
                   {dropoffKhorooOptions.map((o) => (
@@ -870,103 +917,115 @@ export default function NewDeliveryPage() {
                       {o.label}
                     </option>
                   ))}
-                </select>
+                </SoftSelect>
               </div>
             </div>
 
-            <div className="grid gap-3 md:grid-cols-2">
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-slate-800">
-                  ХҮРГЭХ утас (заавал)
-                </label>
-                <input
-                  type="text"
-                  className="w-full border border-slate-300 rounded-xl px-3 py-2 text-sm"
+            <div className="mt-3 grid gap-3 sm:grid-cols-2">
+              <div>
+                <div className="text-[11px] font-semibold text-slate-500">
+                  Утас (заавал)
+                </div>
+                <SoftInput
                   placeholder="Ж: 9911XXXX"
                   value={dropoffPhone}
                   onChange={(e) => setDropoffPhone(e.target.value)}
                 />
               </div>
 
-              <div className="flex items-end">
-                <button
-                  type="button"
-                  onClick={handleGeocodeTo}
-                  disabled={geoLoadingTo || !dropoffDistrict || !dropoffKhoroo}
-                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:border-slate-300 disabled:opacity-60"
-                >
-                  {geoLoadingTo ? "..." : "🔴 Хүргэх цэг хайх"}
-                </button>
+              <div>
+                <div className="text-[11px] font-semibold text-slate-500">
+                  Дэлгэрэнгүй хаяг (сонголт)
+                </div>
+                <SoftInput
+                  placeholder="Гудамж, байр, тоот…"
+                  value={toAddress}
+                  onChange={(e) => setToAddress(e.target.value)}
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Compact details */}
+          <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+            <div className="text-sm font-semibold text-slate-900">
+              Юу хүргэх · Үнэ
+            </div>
+
+            <div className="mt-3 grid gap-3 sm:grid-cols-2">
+              <div>
+                <div className="text-[11px] font-semibold text-slate-500">
+                  Үнэ (₮) — заавал
+                </div>
+                <SoftInput
+                  inputMode="numeric"
+                  placeholder="Ж: 15000"
+                  value={price}
+                  onChange={(e) => setPrice(e.target.value)}
+                />
+              </div>
+
+              <div>
+                <div className="text-[11px] font-semibold text-slate-500">
+                  Төрөл (товч)
+                </div>
+                <div className="grid grid-cols-3 gap-2">
+                  {[
+                    { id: "apartment", label: "Орон сууц" },
+                    { id: "ger", label: "Гэр" },
+                    { id: "camp", label: "Camp" },
+                  ].map((x) => {
+                    const active = deliveryType === x.id;
+                    return (
+                      <button
+                        key={x.id}
+                        type="button"
+                        onClick={() => setDeliveryType(x.id)}
+                        className={[
+                          "rounded-xl border px-3 py-2 text-xs font-semibold transition-colors",
+                          active
+                            ? "border-emerald-200 bg-emerald-50/70 text-emerald-900"
+                            : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50",
+                        ].join(" ")}
+                      >
+                        {x.label}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
             </div>
 
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-slate-800">
-                ХҮРГЭХ хаяг (дэлгэрэнгүй)
-              </label>
-              <input
-                type="text"
-                className="w-full border border-slate-300 rounded-xl px-3 py-2 text-sm"
-                placeholder="Ж: Гудамж, байр, тоот, орц, код, давхар…"
-                value={toAddress}
-                onChange={(e) => setToAddress(e.target.value)}
+            <div className="mt-3">
+              <div className="text-[11px] font-semibold text-slate-500">
+                Тайлбар (сонголт)
+              </div>
+              <SoftTextArea
+                rows={3}
+                placeholder="Ж: 2 хайрцаг, эмзэг, түргэн…"
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
               />
             </div>
           </div>
 
-          {/* ===================== ЕРӨНХИЙ ===================== */}
-          <div className="space-y-2">
-            <label className="text-sm font-medium text-slate-800">
-              Хүргэлтийн төрөл
-            </label>
-            <select
-              value={deliveryType}
-              onChange={(e) => setDeliveryType(e.target.value)}
-              className="w-full border border-slate-300 rounded-xl px-3 py-2 text-sm"
-            >
-              <option value="apartment">🏙 Байр</option>
-              <option value="ger">🏠 Гэр хороолол</option>
-              <option value="camp">🏕 Лагер</option>
-              <option value="countryside">🚌 Орон нутаг (унаанд тавих)</option>
-            </select>
-          </div>
-
-          <div className="space-y-2">
-            <label className="text-sm font-medium text-slate-800">Үнэ (₮)</label>
-            <input
-              type="number"
-              inputMode="numeric"
-              className="w-full border border-slate-300 rounded-xl px-3 py-2 text-sm"
-              placeholder="Ж: 5000"
-              value={price}
-              onChange={(e) => setPrice(e.target.value)}
-            />
-          </div>
-
-          <div className="space-y-2">
-            <label className="text-sm font-medium text-slate-800">
-              Юу хүргүүлэх гэж байгаа (товч)
-            </label>
-            <textarea
-              className="w-full border border-slate-300 rounded-xl px-3 py-2 text-sm h-20"
-              placeholder="Ж: 2 хайрцаг ус, 1 тоног төхөөрөмж…"
-              value={note}
-              onChange={(e) => setNote(e.target.value)}
-            />
-          </div>
-
-          <div>
+          {/* Submit */}
+          <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
             <button
               type="submit"
-              disabled={sending || !readyForSubmit}
-              className="w-full rounded-xl bg-emerald-600 text-white text-sm font-medium px-4 py-2 hover:bg-emerald-700 disabled:bg-emerald-400 transition"
+              disabled={!readyForSubmit || sending}
+              className={[
+                "w-full rounded-2xl px-4 py-3 text-sm font-extrabold tracking-tight text-white",
+                sending || !readyForSubmit
+                  ? "bg-emerald-300"
+                  : "bg-emerald-600 hover:bg-emerald-700",
+              ].join(" ")}
             >
               {sending ? "Илгээж байна…" : "Хүргэлт үүсгэх"}
             </button>
 
-            <div className="mt-2 text-[11px] text-slate-500">
-              Илгээхээс өмнө: 🔴 цэгээ map дээр байрлуул (эсвэл “цэг хайх” дар).
-              🟠 цэг түгжсэн бол алга болохгүй.
+            <div className="mt-2 text-[11px] text-slate-500 text-center">
+              Дүүрэг/хороо · 2 утас · үнэ — бүрэн байвал илгээнэ.
             </div>
           </div>
         </form>
