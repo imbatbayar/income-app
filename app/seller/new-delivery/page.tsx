@@ -1,8 +1,10 @@
 "use client";
+export const dynamic = "force-dynamic";
+
 
 import "leaflet/dist/leaflet.css";
 
-import dynamic from "next/dynamic";
+import dynamicImport from "next/dynamic";
 import L from "leaflet";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -138,7 +140,7 @@ function mapEmojiIcon(kind: "pickupLocked" | "pickupEdit" | "dropoff") {
   });
 }
 
-const LeafletMap = dynamic(
+const LeafletMap = dynamicImport(
   async () => {
     const RL = await import("react-leaflet");
     const { MapContainer, TileLayer, Marker, Polyline } = RL;
