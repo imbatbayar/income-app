@@ -1,29 +1,18 @@
+export const dynamic = "force-dynamic";
+
 "use client";
 
 /* ===========================
- * app/driver/page.tsx (FINAL v7.2)
+ * app/driver/page.tsx (FINAL v7.2.1)
  *
- * ✅ FIX: Driver list дээр pickup/dropoff Дүүрэг/Хороо (4 талбар) харуулна
- * ✅ UI: OPEN card-г “3 тусдаа блок” болгож зөөлөн өнгөөр ялгав
+ * ✅ FIX (Vercel build):
+ * - useSearchParams() MUST be inside <Suspense> boundary (Next rule)
+ * - force-dynamic to avoid prerender crash on /driver
  *
- * ✅ Flow:
- * OPEN -> ASSIGNED -> ON_ROUTE -> DELIVERED
- *
- * ✅ Seller action:
- * - ASSIGNED -> ON_ROUTE : SELLER тал "Жолооч барааг авч явлаа"
- *
- * ✅ Driver actions:
- * - OPEN: "Авах хүсэлт"
- * - REQUESTS: "Хүсэлт цуцлах"
- * - ON_ROUTE: "Хүргэсэн"
- * - DELIVERED: "Устгах" (driver_hidden=true)
- *
- * ⚠ Privacy:
- * - List дээр buyer-н утас зэрэг private info харуулахгүй.
- * - Seller info зөвхөн өөрт оноогдсон үед (OPEN биш төлвүүд дээр) гарна.
+ * ✅ UI/logic: unchanged
  * =========================== */
 
-import { useEffect, useMemo, useState } from "react";
+import React, { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import {
@@ -120,7 +109,10 @@ function areaLine(district?: string | null, khoroo?: string | null) {
 function badge(status: DeliveryStatus) {
   switch (status) {
     case "OPEN":
-      return { text: "Нээлттэй", cls: "bg-emerald-50 text-emerald-700 border-emerald-100" };
+      return {
+        text: "Нээлттэй",
+        cls: "bg-emerald-50 text-emerald-700 border-emerald-100",
+      };
     case "ASSIGNED":
       return { text: "Танд оноосон", cls: "bg-sky-50 text-sky-700 border-sky-100" };
     case "ON_ROUTE":
@@ -142,7 +134,20 @@ function badge(status: DeliveryStatus) {
   }
 }
 
+/**
+ * ✅ Wrapper: Next build дээр useSearchParams() алдаа гаргахгүй
+ * - useSearchParams хэрэглэж буй component-г Suspense дотор ажиллуулна
+ * - UI логикт өөрчлөлт 0
+ */
 export default function DriverPage() {
+  return (
+    <Suspense fallback={null}>
+      <DriverPageInner />
+    </Suspense>
+  );
+}
+
+function DriverPageInner() {
   const router = useRouter();
   const sp = useSearchParams();
 
@@ -204,7 +209,10 @@ export default function DriverPage() {
     }
 
     try {
-      const { data, error } = await supabase.from("users").select("id,name,phone").in("id", sellerIds);
+      const { data, error } = await supabase
+        .from("users")
+        .select("id,name,phone")
+        .in("id", sellerIds);
 
       if (error) {
         console.warn(error);
@@ -368,7 +376,11 @@ export default function DriverPage() {
     try {
       const my = myBids.find((b) => b.delivery_id === deliveryId);
       if (my) {
-        const { error } = await supabase.from("driver_bids").delete().eq("id", my.id).eq("driver_id", user.id);
+        const { error } = await supabase
+          .from("driver_bids")
+          .delete()
+          .eq("id", my.id)
+          .eq("driver_id", user.id);
 
         if (error) throw error;
 
@@ -523,8 +535,8 @@ export default function DriverPage() {
 
           {activeTab === "ASSIGNED" && (
             <div className="rounded-xl border border-slate-200 bg-white p-3 text-xs text-slate-600">
-              Энэ таб дээрх хүргэлтүүдийг <span className="font-semibold">худалдагч</span> “Жолооч барааг авч явлаа”
-              гэж тэмдэглэсний дараа л “Замд” таб руу шилжинэ.
+              Энэ таб дээрх хүргэлтүүдийг <span className="font-semibold">худалдагч</span> “Жолооч барааг авч явлаа” гэж
+              тэмдэглэсний дараа л “Замд” таб руу шилжинэ.
             </div>
           )}
 
