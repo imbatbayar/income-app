@@ -16,77 +16,9 @@ type DeliveryPosterData = {
   dropoff_lng?: number | null;
 };
 
-function area(d?: string | null, k?: string | null) {
-  if (d && k) return `${d} · ${k}-р хороо`;
-  return d || k || "—";
-}
-function price(n?: number | null) {
-  if (!n) return "—";
+function money(n: number | null | undefined) {
+  if (n == null) return "—";
   return `${Number(n).toLocaleString("mn-MN")}₮`;
-}
-
-export default function DeliveryPosterCard({ d }: { d: DeliveryPosterData }) {
-  const hasMap =
-    Number.isFinite(Number(d.pickup_lat)) &&
-    Number.isFinite(Number(d.pickup_lng)) &&
-    Number.isFinite(Number(d.dropoff_lat)) &&
-    Number.isFinite(Number(d.dropoff_lng));
-
-  return (
-    <div className="w-[1080px] h-[1080px] bg-[#f6f7f9] p-[44px] rounded-[36px] overflow-hidden">
-      {/* Header */}
-      <div className="flex items-center justify-between mb-[18px]">
-        <div className="text-[34px] font-[900] tracking-[0.5px] text-[#0f172a]">
-          INCOME
-        </div>
-        <div className="text-[20px] font-[900] text-[#16a34a] tracking-[0.2px]">
-          ХҮРГҮҮЛЭХ САНАЛ
-        </div>
-      </div>
-
-      {/* Map */}
-      <div className="rounded-[28px] border border-[#dbe3ea] bg-white shadow-[0_18px_40px_rgba(15,23,42,0.10)] overflow-hidden">
-        <div className="h-[560px]">
-          {hasMap ? (
-            <DeliveryRouteMap
-              pickup={{ lat: d.pickup_lat!, lng: d.pickup_lng! }}
-              dropoff={{ lat: d.dropoff_lat!, lng: d.dropoff_lng! }}
-            />
-          ) : (
-            <div className="h-full grid place-items-center text-[#64748b] text-[22px] font-[800]">
-              Газрын зурагт цэг тавиагүй байна
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* Info */}
-      <div className="mt-[28px] grid grid-cols-12 gap-[18px]">
-        <div className="col-span-7 rounded-[24px] bg-white border border-[#e2e8f0] p-[24px]">
-          <Row label="ХААНААС" value={area(d.pickup_district, d.pickup_khoroo)} />
-          <Row label="ХААШАА" value={area(d.dropoff_district, d.dropoff_khoroo)} />
-          <Row label="ТАЙЛБАР" value={(d.note || "—").trim() || "—"} />
-        </div>
-
-        <div className="col-span-5 rounded-[24px] bg-[#0f172a] text-white p-[24px] border border-[#0b1220] shadow-[0_18px_40px_rgba(2,6,23,0.28)]">
-          <div className="text-[18px] font-[900] opacity-80">ҮНЭ</div>
-          <div className="mt-[8px] text-[54px] font-[900] tracking-[0.2px]">
-            {price(d.price_mnt)}
-          </div>
-
-          <div className="mt-[18px] text-[20px] font-[800] leading-[1.3]">
-            Та хүргүүлэх саналаа татаж аваад хүссэн групп/пэйж рүүгээ пост
-            хийгээрэй.
-          </div>
-        </div>
-      </div>
-
-      {/* Footer */}
-      <div className="mt-[22px] rounded-[18px] bg-[#e9f7ee] border border-[#bfe8cc] px-[18px] py-[14px] text-[16px] font-[900] text-[#166534]">
-        #INCOME · {d.id}
-      </div>
-    </div>
-  );
 }
 
 function Row({ label, value }: { label: string; value: string }) {
@@ -97,6 +29,86 @@ function Row({ label, value }: { label: string; value: string }) {
       </div>
       <div className="flex-1 text-[22px] font-[900] text-[#0f172a] leading-[1.25]">
         {value}
+      </div>
+    </div>
+  );
+}
+
+export default function DeliveryPosterCard({ d }: { d: DeliveryPosterData }) {
+  const hasMap =
+    Number.isFinite(Number(d.pickup_lat)) &&
+    Number.isFinite(Number(d.pickup_lng)) &&
+    Number.isFinite(Number(d.dropoff_lat)) &&
+    Number.isFinite(Number(d.dropoff_lng));
+
+  const fromText =
+    (d.pickup_district || "—") +
+    (d.pickup_khoroo ? ` · ${d.pickup_khoroo}` : "");
+  const toText =
+    (d.dropoff_district || "—") +
+    (d.dropoff_khoroo ? ` · ${d.dropoff_khoroo}` : "");
+
+  const noteText = (d.note || "").trim() || "—";
+
+  return (
+    <div className="w-[1080px] h-[1080px] bg-[#f6f7f9] p-[44px] rounded-[36px] overflow-hidden">
+      {/* Header */}
+      <div className="flex items-center justify-between mb-[18px]">
+        <div className="text-[34px] font-[900] tracking-tight text-[#0f172a]">
+          INCOME
+        </div>
+        <div className="text-[20px] font-[900] text-[#16a34a]">
+          ХҮРГҮҮЛЭХ САНАЛ
+        </div>
+      </div>
+
+      {/* Map */}
+      <div className="rounded-[26px] bg-white p-[18px] border border-[#e7edf4]">
+        <div className="rounded-[22px] overflow-hidden border border-[#eef2f7]">
+          {hasMap ? (
+            <DeliveryRouteMap
+              pickup={{ lat: Number(d.pickup_lat), lng: Number(d.pickup_lng) }}
+              dropoff={{ lat: Number(d.dropoff_lat), lng: Number(d.dropoff_lng) }}
+              aspectRatio="16/9"
+            />
+          ) : (
+            <div className="w-full" style={{ aspectRatio: "16/9" }} />
+          )}
+        </div>
+
+        {/* Info + Price */}
+        <div className="mt-[18px] grid grid-cols-12 gap-[18px]">
+          {/* left info */}
+          <div className="col-span-7 rounded-[22px] bg-white border border-[#eef2f7] p-[18px]">
+            <Row label="ХААНААС" value={fromText} />
+            <Row label="ХААШАА" value={toText} />
+            <Row label="ТАЙЛБАР" value={noteText} />
+          </div>
+
+          {/* right price */}
+          <div className="col-span-5 rounded-[22px] bg-[#0b1220] text-white p-[22px] flex flex-col justify-between">
+            <div className="text-[14px] font-[900] opacity-80">Үнэ</div>
+
+            <div className="mt-[6px] text-[60px] font-[900] leading-none">
+              {money(d.price_mnt)}
+            </div>
+
+            {/* ✅ Үнийн доорх зөв мессеж (ганцхан) */}
+            <div className="mt-[10px] text-[15px] font-[800] leading-[1.35] text-white/90">
+              Та INCOME апп-ыг суулгаснаар хүргэлт хийлгэх саналуудыг дэлгэрэнгүй
+              үзэж болно.
+            </div>
+
+            {/* ❌ давхардаж байсан “пост хийгээрэй” мессежийг постер дээрээс авсан */}
+          </div>
+        </div>
+
+        {/* Footer id */}
+        <div className="mt-[14px] rounded-[14px] bg-[#e8f5ec] border border-[#bfe7c9] px-[14px] py-[10px]">
+          <div className="text-[12px] font-[900] text-[#166534]">
+            #INCOME • {d.id}
+          </div>
+        </div>
       </div>
     </div>
   );
