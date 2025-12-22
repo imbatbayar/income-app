@@ -1,27 +1,68 @@
 @import "leaflet/dist/leaflet.css";
 @import "tailwindcss";
 
+/* =========================
+   INCOME UI — Global Tokens
+   ========================= */
 :root {
+  /* Base */
   --background: #ffffff;
-  --foreground: #171717;
+  --foreground: #0f172a;
+  /* slate-900 */
+
+  /* INCOME brand greens */
+  --income-green: #0b8f5a;
+  --income-green-dark: #066a43;
+  --income-green-soft: #e9f7f0;
+
+  /* Typography: system stack (Arial/Segoe UI) */
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Arial,
+    "Noto Sans", "Helvetica Neue", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+    "Liberation Mono", "Courier New", monospace;
 }
 
+/* Tailwind v4 theme variables mapping */
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+
+  /* override Geist vars -> system fonts */
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
 }
 
+/* Dark mode */
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    --background: #0b1220;
+    /* deep slate */
+    --foreground: #e5e7eb;
+    /* slate-200 */
+
+    /* greens stay readable in dark */
+    --income-green: #20c27a;
+    --income-green-dark: #15a764;
+    --income-green-soft: rgba(32, 194, 122, 0.14);
   }
+}
+
+html,
+body {
+  height: 100%;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-sans);
+}
+
+/* жижиг туслах class-ууд (хэрэг гарвал шууд ашиглана) */
+.income-green {
+  color: var(--income-green);
+}
+
+.bg-income-soft {
+  background: var(--income-green-soft);
 }

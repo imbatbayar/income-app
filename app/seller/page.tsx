@@ -36,6 +36,12 @@ type DeliveryRow = {
   dropoff_district: string | null;
   dropoff_khoroo: string | null;
 
+  // ✅ NEW: координатууд (postер + map-д хэрэгтэй)
+  pickup_lat: number | null;
+  pickup_lng: number | null;
+  dropoff_lat: number | null;
+  dropoff_lng: number | null;
+
   status: DeliveryStatus;
   created_at: string;
   price_mnt: number | null;
@@ -264,6 +270,12 @@ export default function SellerDashboardPage() {
           pickup_khoroo,
           dropoff_district,
           dropoff_khoroo,
+
+          pickup_lat,
+          pickup_lng,
+          dropoff_lat,
+          dropoff_lng,
+
           status,
           created_at,
           price_mnt,
@@ -469,7 +481,9 @@ export default function SellerDashboardPage() {
       const ok = await copyText(text);
 
       if (ok)
-        setMsg("📤 SHARE текстийг хууллаа. Facebook дээр paste хийгээд post хийгээрэй.");
+        setMsg(
+          "📤 SHARE текстийг хууллаа. Facebook дээр paste хийгээд post хийгээрэй."
+        );
       else setMsg(text);
 
       window.open(
@@ -517,7 +531,9 @@ export default function SellerDashboardPage() {
 
       if (e2) throw e2;
 
-      setMsg("Жолоочийг найдваргүй гэж тэмдэглээд хүргэлтийг дахин нээлттэй болголоо.");
+      setMsg(
+        "Жолоочийг найдваргүй гэж тэмдэглээд хүргэлтийг дахин нээлттэй болголоо."
+      );
       await fetchAll(user.id);
       changeTab("OPEN");
     } catch (e: any) {
@@ -587,7 +603,7 @@ export default function SellerDashboardPage() {
             📂 OPEN
           </button>
 
-          {/* ✅ зөвхөн SHARE товчийг салгасан (UI/логик бусад нь хэвээр) */}
+          {/* ✅ зөвхөн SHARE товч (payload-д map мэдээлэл өгнө) */}
           <ShareDeliveryButton
             payload={{
               id: d.id,
@@ -595,6 +611,17 @@ export default function SellerDashboardPage() {
               to: toArea,
               priceText: fmtPrice(d.price_mnt),
               note: d.note || "",
+
+              // ✅ постерийн “гоё” хэсгүүд
+              price_mnt: d.price_mnt,
+              pickup_district: d.pickup_district,
+              pickup_khoroo: d.pickup_khoroo,
+              dropoff_district: d.dropoff_district,
+              dropoff_khoroo: d.dropoff_khoroo,
+              pickup_lat: d.pickup_lat,
+              pickup_lng: d.pickup_lng,
+              dropoff_lat: d.dropoff_lat,
+              dropoff_lng: d.dropoff_lng,
             }}
             onToast={(t) => setMsg(t)}
             className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-900 hover:border-slate-300 disabled:opacity-60"
@@ -681,7 +708,7 @@ export default function SellerDashboardPage() {
               </button>
             )}
 
-            {/* ✅ DELIVERED + PAID дээр delete харагдана (UI эвдэхгүй) */}
+            {/* ✅ DELIVERED + PAID дээр delete харагдана */}
             {(d.status === "DELIVERED" || d.status === "PAID") && (
               <button
                 onClick={() => void deleteDelivered(d.id)}
