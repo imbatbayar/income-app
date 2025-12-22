@@ -597,7 +597,7 @@ export default function SellerDashboardPage() {
               note: d.note || "",
             }}
             onToast={(t) => setMsg(t)}
-            className="rounded-xl bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
+            className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-900 hover:border-slate-300 disabled:opacity-60"
           />
         </div>
       </div>
