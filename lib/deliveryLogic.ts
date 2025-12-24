@@ -19,40 +19,16 @@ export type DeliveryStatus =
   | "ASSIGNED"
   | "ON_ROUTE"
   | "DELIVERED"
-  | "PAID" // legacy/status-level only (UI таб байхгүй)
-  | "DISPUTE" // legacy/status-level only (UI таб байхгүй)
-  | "CLOSED" // legacy/status-level only (UI таб байхгүй)
-  | "CANCELLED"; // legacy only
+  | "PAID"
+  | "DISPUTE"
+  | "CLOSED"
+  | "CANCELLED";
 
-// ---------- SELLER TABS (UI) ----------
 export type SellerTabId = "OPEN" | "ASSIGNED" | "ON_ROUTE" | "DELIVERED";
 
-export const SELLER_TABS: { id: SellerTabId; label: string }[] = [
-  { id: "OPEN", label: "Нээлттэй" },
-  { id: "ASSIGNED", label: "Жолооч сонгосон" },
-  { id: "ON_ROUTE", label: "Замд" },
-  { id: "DELIVERED", label: "Хүргэсэн" },
-];
-
-// ---------- DRIVER TABS (UI) ----------
-export type DriverTabId =
-  | "OPEN"
-  | "REQUESTS" // OPEN + myBid
-  | "ASSIGNED"
-  | "ON_ROUTE"
-  | "DELIVERED";
-
-export const DRIVER_TABS: { id: DriverTabId; label: string }[] = [
-  { id: "OPEN", label: "Нээлттэй" },
-  { id: "REQUESTS", label: "Хүсэлт" },
-  { id: "ASSIGNED", label: "Намайг сонгосон" },
-  { id: "ON_ROUTE", label: "Замд" },
-  { id: "DELIVERED", label: "Хүргэсэн" },
-];
-
 // ---------- LABELS ----------
-export function statusLabel(status: DeliveryStatus): string {
-  switch (status) {
+export function sellerTabLabel(id: SellerTabId) {
+  switch (id) {
     case "OPEN":
       return "Нээлттэй";
     case "ASSIGNED":
@@ -60,17 +36,8 @@ export function statusLabel(status: DeliveryStatus): string {
     case "ON_ROUTE":
       return "Замд";
     case "DELIVERED":
-      return "Хүргэсэн";
-    case "PAID":
-      return "Төлсөн";
-    case "DISPUTE":
-      return "Маргаан";
-    case "CLOSED":
-      return "Хаагдсан";
-    case "CANCELLED":
-      return "Цуцалсан";
     default:
-      return status;
+      return "Хүргэсэн";
   }
 }
 
@@ -100,81 +67,75 @@ export function getSellerTabForStatus(status: DeliveryStatus): SellerTabId {
   }
 }
 
-// REQUESTS энд орохгүй (UI дээр OPEN + myBid-аар салгана)
-export function getDriverTabForStatus(
-  status: DeliveryStatus
-): Exclude<DriverTabId, "REQUESTS"> {
+// ---------- DRIVER TABS (UI) ----------
+export type DriverTabId =
+  | "OFFERS" // 📦 Санал
+  | "PICKUP" // 📥 Ирж аваарай
+  | "IN_TRANSIT" // 📤 Хүргэлт эхэлсэн
+  | "DONE"; // 🎉 Хүргэчихлээ
+
+export const DRIVER_TABS: { id: DriverTabId; label: string }[] = [
+  { id: "OFFERS", label: "📦 Санал" },
+  { id: "PICKUP", label: "📥 Ирж аваарай" },
+  { id: "IN_TRANSIT", label: "📤 Хүргэлт эхэлсэн" },
+  { id: "DONE", label: "🎉 Хүргэчихлээ" },
+];
+
+// ---------- LABELS ----------
+export function statusLabel(status: DeliveryStatus): string {
   switch (status) {
     case "OPEN":
-      return "OPEN";
+      return "Нээлттэй";
     case "ASSIGNED":
-      return "ASSIGNED";
+      return "Жолооч сонгосон";
     case "ON_ROUTE":
-      return "ON_ROUTE";
+      return "Замд";
+    case "DELIVERED":
+      return "Хүргэсэн";
+    case "PAID":
+      return "Төлсөн";
+    case "DISPUTE":
+      return "Маргаан";
+    case "CLOSED":
+      return "Хаагдсан";
+    case "CANCELLED":
+      return "Цуцалсан";
+    default:
+      return status;
+  }
+}
+
+// ---------- HELPERS ----------
+function bool(v: any): boolean {
+  return v === true || v === "true" || v === 1 || v === "1";
+}
+function hasTs(v: string | null | undefined): boolean {
+  if (!v) return false;
+  const s = String(v).trim();
+  return s.length > 0 && s !== "null" && s !== "undefined";
+}
+
+// ---------- DRIVER TAB (status -> driverTab) ----------
+export function getDriverTabForStatus(status: DeliveryStatus): DriverTabId {
+  switch (status) {
+    case "OPEN":
+      return "OFFERS";
+    case "ASSIGNED":
+      return "PICKUP";
+    case "ON_ROUTE":
+      return "IN_TRANSIT";
     case "DELIVERED":
     case "PAID":
     case "DISPUTE":
     case "CLOSED":
     case "CANCELLED":
     default:
-      // ✅ БҮХ legacy статусуудыг DELIVERED таб дээр нэгтгэнэ
-      return "DELIVERED";
+      // ✅ БҮХ legacy статусуудыг DONE таб дээр нэгтгэнэ
+      return "DONE";
   }
 }
 
-// ---------- HELPERS ----------
-function hasTs(v: any): boolean {
-  return !!v;
-}
-function bool(v: any): boolean {
-  return !!v;
-}
-
-// ---------- PERMISSIONS ----------
-
-// ASSIGNED → ON_ROUTE
-export function canDriverMarkOnRoute(input: {
-  status: DeliveryStatus;
-  picked_up_at?: string | null;
-  chosen_driver_id?: string | null;
-  me_driver_id?: string;
-}): boolean {
-  if (isClosedStatus(input.status)) return false;
-
-  const isMine =
-    !input.me_driver_id || !input.chosen_driver_id
-      ? true
-      : input.chosen_driver_id === input.me_driver_id;
-
-  if (!isMine) return false;
-  if (input.status !== "ASSIGNED") return false;
-  if (hasTs(input.picked_up_at)) return false;
-
-  return true;
-}
-
-// ON_ROUTE → DELIVERED
-export function canDriverMarkDelivered(input: {
-  status: DeliveryStatus;
-  delivered_at?: string | null;
-  chosen_driver_id?: string | null;
-  me_driver_id?: string;
-}): boolean {
-  if (isClosedStatus(input.status)) return false;
-
-  const isMine =
-    !input.me_driver_id || !input.chosen_driver_id
-      ? true
-      : input.chosen_driver_id === input.me_driver_id;
-
-  if (!isMine) return false;
-  if (input.status !== "ON_ROUTE") return false;
-  if (hasTs(input.delivered_at)) return false;
-
-  return true;
-}
-
-// DELIVERED → PAID (Seller) — legacy хэвээр үлдээнэ (UI товч байхгүй байж болно)
+// ---------- Seller mark paid (legacy support) ----------
 export function canSellerMarkPaid(input: {
   status: DeliveryStatus;
   seller_paid_at?: string | null;
@@ -189,14 +150,23 @@ export function canSellerMarkPaid(input: {
   return !bool(input.seller_marked_paid);
 }
 
-// PAID → CLOSED (Driver) — legacy хэвээр үлдээнэ (UI товч байхгүй байж болно)
-export function canDriverConfirmPaymentReceived(input: {
+export function normalizePaidFields(input: {
+  seller_paid_at?: string | null;
+  seller_marked_paid?: boolean;
+}): boolean {
+  // аль нэг нь true байвал “seller paid” гэж үзнэ
+  if (input.seller_paid_at !== undefined) return hasTs(input.seller_paid_at);
+  return bool(input.seller_marked_paid);
+}
+
+// ---------- Driver confirm payment (legacy support) ----------
+export function canDriverConfirmPayment(input: {
   status: DeliveryStatus;
   driver_paid_confirmed_at?: string | null;
   driver_confirmed_payment?: boolean;
 }): boolean {
   if (isClosedStatus(input.status)) return false;
-  if (input.status !== "PAID") return false;
+  if (input.status !== "DELIVERED") return false;
 
   if (input.driver_paid_confirmed_at !== undefined) {
     return !hasTs(input.driver_paid_confirmed_at);
@@ -204,53 +174,19 @@ export function canDriverConfirmPaymentReceived(input: {
   return !bool(input.driver_confirmed_payment);
 }
 
-// 🔧 ALIAS (IMPORT ERROR-ИЙГ БҮРЭН ШИЙДНЭ)
-// app/driver/page.tsx дээр `canDriverConfirmPayment` гэж ашиглаж байгаа тул
-// яг энэ нэртэй export-ыг зориудаар гаргаж өгнө.
-export function canDriverConfirmPayment(input: {
-  status: DeliveryStatus;
-  driver_confirmed_payment?: boolean;
-}): boolean {
-  return canDriverConfirmPaymentReceived({
-    status: input.status,
-    driver_confirmed_payment: input.driver_confirmed_payment,
-  });
-}
-
-// ---------- DISPUTE (legacy хэвээр үлдээнэ) ----------
-export function canOpenDispute(status: DeliveryStatus): boolean {
-  if (isClosedStatus(status)) return false;
-  return status === "ON_ROUTE" || status === "DELIVERED" || status === "PAID";
-}
-
-export function canResolveDispute(input: {
-  status: DeliveryStatus;
-  dispute_status?: "none" | "open" | "resolved" | string | null;
-}): boolean {
-  if (isClosedStatus(input.status)) return false;
-  if (input.status !== "DISPUTE") return false;
-
-  if (input.dispute_status !== undefined && input.dispute_status !== null) {
-    return String(input.dispute_status) === "open";
-  }
-  return true;
-}
-
-// PAID дээр 2 тал баталгаажвал хаах эсэх (legacy)
-export function shouldCloseDelivery(input: {
-  status: DeliveryStatus;
-  seller_marked_paid?: boolean;
-  driver_confirmed_payment?: boolean;
-  seller_paid_at?: string | null;
+export function normalizeDriverPaidFields(input: {
   driver_paid_confirmed_at?: string | null;
+  driver_confirmed_payment?: boolean;
 }): boolean {
-  if (input.status !== "PAID") return false;
-
-  if (
-    input.seller_paid_at !== undefined &&
-    input.driver_paid_confirmed_at !== undefined
-  ) {
-    return hasTs(input.seller_paid_at) && hasTs(input.driver_paid_confirmed_at);
-  }
-  return bool(input.seller_marked_paid) && bool(input.driver_confirmed_payment);
+  if (input.driver_paid_confirmed_at !== undefined)
+    return hasTs(input.driver_paid_confirmed_at);
+  return bool(input.driver_confirmed_payment);
 }
+
+// ---------- SELLER TABS (UI) ----------
+export const SELLER_TABS: { id: SellerTabId; label: string }[] = [
+  { id: "OPEN", label: "Нээлттэй" },
+  { id: "ASSIGNED", label: "Жолооч сонгосон" },
+  { id: "ON_ROUTE", label: "Замд" },
+  { id: "DELIVERED", label: "Хүргэсэн" },
+];
