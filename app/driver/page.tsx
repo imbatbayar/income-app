@@ -15,6 +15,9 @@ export const dynamic = "force-dynamic";
  * - Toast msg/error -> closable (✕) + auto hide
  * - UI seller-style (no black)
  *
+ * ✅ Added (NO flow change):
+ * - PICKUP таб дээр (ASSIGNED + isMine үед) “🧭 Худалдагчийн хаяг руу очих” Google Maps товч
+ *
  * ⛔ Map UI untouched
  * =========================== */
 
@@ -772,7 +775,11 @@ function DriverPageInner() {
                   {t.label}
                 </div>
                 <div
-                  className={active ? "mt-1 text-lg font-extrabold text-emerald-900" : "mt-1 text-lg font-extrabold text-slate-900"}
+                  className={
+                    active
+                      ? "mt-1 text-lg font-extrabold text-emerald-900"
+                      : "mt-1 text-lg font-extrabold text-slate-900"
+                  }
                 >
                   {c}
                 </div>
@@ -951,7 +958,6 @@ function DriverPageInner() {
                     <div className="mt-1 text-[12px] font-semibold text-slate-600">
                       Та өөрт ойр байгаа хүргэлтүүдийг энэ хэсгээс хайгаарай. Тантай хамгийн ойр хүргэлтийн санал болон явах чиглэлд чинь хамгийн ойр байгаагаар нь эрэмблэн дээр гаргана.
                     </div>
-
                   </div>
                 </div>
 
@@ -1062,6 +1068,19 @@ function OfferCard(props: {
   const cardBase =
     "rounded-2xl border p-4 " + (isPending ? "border-slate-200 bg-slate-50" : "border-slate-200 bg-white");
 
+  // ✅ Google Maps URL helpers (local only)
+  const mapsDirUrl = (lat: number, lng: number) =>
+    `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}&travelmode=driving`;
+  const mapsSearchUrl = (q: string) =>
+    `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}`;
+
+  const pickupNavUrl =
+    d.pickup_lat != null && d.pickup_lng != null
+      ? mapsDirUrl(d.pickup_lat, d.pickup_lng)
+      : d.from_address
+      ? mapsSearchUrl(d.from_address)
+      : null;
+
   return (
     <div className={cardBase}>
       <div className="flex items-start justify-between gap-3">
@@ -1111,6 +1130,31 @@ function OfferCard(props: {
               <div className="text-sm text-slate-500">Утас: —</div>
             )}
           </div>
+        </div>
+      )}
+
+      {/* ✅ STEP 3-д шаардлагатай нэмэлт: PICKUP таб дээр л pickup address + navigation */}
+      {activeTab === "PICKUP" && d.status === "ASSIGNED" && isMine && (
+        <div className="mt-3 rounded-xl border border-slate-200 bg-white p-3">
+          <div className="text-[11px] text-slate-500">ОЧИЖ АВАХ (ХУДАЛДАГЧ)</div>
+          <div className="mt-1 text-sm font-semibold text-slate-900">{d.from_address || "—"}</div>
+
+          <div className="mt-2 text-[11px] text-slate-500">
+            ⚠️ Таны утсанд Google Maps апп суусан байх ёстой. (Суусан бол шууд навигац нээгдэнэ.)
+          </div>
+
+          {pickupNavUrl ? (
+            <a
+              href={pickupNavUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="mt-3 inline-flex w-full items-center justify-center rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-extrabold text-emerald-900 hover:bg-emerald-100"
+            >
+              🧭 Худалдагчийн хаяг руу очих
+            </a>
+          ) : (
+            <div className="mt-3 text-xs text-slate-500">Байршлын мэдээлэл олдсонгүй.</div>
+          )}
         </div>
       )}
 

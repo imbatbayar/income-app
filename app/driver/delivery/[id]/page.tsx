@@ -1,19 +1,24 @@
 "use client";
 
 /* ===========================
- * app/driver/delivery/[id]/page.tsx (FINAL v7.3 - build fix)
+ * app/driver/delivery/[id]/page.tsx
+ * FIX: OPEN дээр хаяг/газрын зураг ил гарахгүй.
  *
- * ✅ FIX:
- * - DeliveryRouteMap component нь `height` prop авдаггүй байсан тул
- *   height-г wrapper div дээр өгч, component руу height дамжуулахгүй болгосон.
+ * ✅ OPEN үед:
+ *  - зөвхөн дүүрэг/хороо + note
+ *  - ✋ Авъя / 🗑️ Хүсэлт цуцлах
+ *  - Хаяг, map = HIDE
+ *
+ * ✅ ASSIGNED (зөвхөн минийх) үед:
+ *  - Худалдагчийн хаяг (pickup) тод
+ *  - Google Maps нээх товч
+ *  - Map preview (зөвхөн pickup point)
  * =========================== */
 
 import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { DeliveryStatus, getDriverTabForStatus } from "@/lib/deliveryLogic";
-
-// ✅ Alias import (тогтвортой)
 import DeliveryRouteMap from "@/app/components/Map/DeliveryRouteMap";
 
 type Role = "seller" | "driver";
@@ -34,6 +39,11 @@ type DeliveryDetail = {
   to_address: string | null;
   note: string | null;
 
+  pickup_district: string | null;
+  pickup_khoroo: string | null;
+  dropoff_district: string | null;
+  dropoff_khoroo: string | null;
+
   pickup_lat: number | null;
   pickup_lng: number | null;
   dropoff_lat: number | null;
@@ -45,15 +55,6 @@ type DeliveryDetail = {
   delivery_type: string | null;
 
   chosen_driver_id: string | null;
-
-  seller_marked_paid: boolean;
-  driver_confirmed_payment: boolean;
-  closed_at: string | null;
-
-  dispute_reason: string | null;
-  dispute_opened_at: string | null;
-
-  seller_hidden: boolean;
 };
 
 type BidLite = {
@@ -61,18 +62,6 @@ type BidLite = {
   driver_id: string;
   delivery_id: string;
   created_at: string;
-};
-
-type DeliveryPrivate = {
-  delivery_id: string;
-  to_detail: string | null;
-  buyer_phone: string | null;
-};
-
-type SellerLite = {
-  id: string;
-  name: string | null;
-  phone: string | null;
 };
 
 // ---------------- helpers ----------------
@@ -87,23 +76,24 @@ function fmtDT(iso: string | null | undefined) {
   try {
     return new Date(iso).toLocaleString("mn-MN", { hour12: false });
   } catch {
-    return iso || "";
+    return String(iso);
   }
 }
 
-function typeLabel(deliveryType: string | null): { icon: string; label: string } {
-  switch (deliveryType) {
-    case "apartment":
-      return { icon: "🏙", label: "Байр" };
-    case "ger":
-      return { icon: "🏠", label: "Гэр хороолол" };
-    case "camp":
-      return { icon: "🏕", label: "Лагер" };
-    case "countryside":
-      return { icon: "🚌", label: "Орон нутаг" };
-    default:
-      return { icon: "📦", label: "Хүргэлт" };
-  }
+function shorten(s: string | null, max = 120) {
+  if (!s) return "—";
+  const t = s.trim();
+  if (t.length <= max) return t;
+  return t.slice(0, max).replace(/\s+$/, "") + "…";
+}
+
+function areaLine(district?: string | null, khoroo?: string | null) {
+  const d = (district || "").trim();
+  const k = (khoroo || "").trim();
+  if (d && k) return `${d} ${k} хороо`;
+  if (d) return d;
+  if (k) return `${k} хороо`;
+  return "—";
 }
 
 function badge(status: DeliveryStatus) {
@@ -115,45 +105,23 @@ function badge(status: DeliveryStatus) {
     case "ON_ROUTE":
       return { text: "Замд", cls: "bg-indigo-50 text-indigo-700 border-indigo-100" };
     case "DELIVERED":
-      return { text: "Хүргэсэн", cls: "bg-amber-50 text-amber-700 border-amber-100" };
-    case "PAID":
-      return { text: "Төлсөн", cls: "bg-emerald-50 text-emerald-800 border-emerald-100" };
-    case "DISPUTE":
-      return { text: "Маргаан", cls: "bg-rose-50 text-rose-700 border-rose-100" };
-    case "CLOSED":
-      return { text: "Хаагдсан", cls: "bg-slate-50 text-slate-700 border-slate-200" };
-    case "CANCELLED":
-      return { text: "Цуцалсан", cls: "bg-rose-50 text-rose-700 border-rose-100" };
+      return { text: "Хүргэсэн", cls: "bg-amber-50 text-amber-800 border-amber-100" };
     default:
       return { text: status, cls: "bg-slate-50 text-slate-700 border-slate-200" };
   }
 }
 
+function mapsDirUrl(lat: number, lng: number) {
+  // origin = current location (утаснаас)
+  return `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}&travelmode=driving`;
+}
+function mapsSearchUrl(q: string) {
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}`;
+}
+
 function pickErr(e: any, fallback: string) {
   const msg = e?.message || e?.error_description || e?.details;
   return msg ? `${fallback} (${String(msg)})` : fallback;
-}
-
-async function copyText(text: string) {
-  if (!text) return false;
-  try {
-    await navigator.clipboard.writeText(text);
-    return true;
-  } catch {
-    try {
-      const ta = document.createElement("textarea");
-      ta.value = text;
-      ta.style.position = "fixed";
-      ta.style.left = "-9999px";
-      document.body.appendChild(ta);
-      ta.select();
-      document.execCommand("copy");
-      document.body.removeChild(ta);
-      return true;
-    } catch {
-      return false;
-    }
-  }
 }
 
 // ---------------- page ----------------
@@ -168,33 +136,16 @@ export default function DriverDeliveryDetailPage() {
 
   const [user, setUser] = useState<IncomeUser | null>(null);
   const [delivery, setDelivery] = useState<DeliveryDetail | null>(null);
-
-  const [seller, setSeller] = useState<SellerLite | null>(null);
-  const [sellerLoading, setSellerLoading] = useState(false);
-
   const [myBid, setMyBid] = useState<BidLite | null>(null);
-
-  // ✅ private info state
-  const [priv, setPriv] = useState<DeliveryPrivate | null>(null);
-  const [privLoading, setPrivLoading] = useState(false);
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
 
   const [bidLoading, setBidLoading] = useState(false);
-  const [cancelBidLoading, setCancelBidLoading] = useState(false);
+  const [cancelLoading, setCancelLoading] = useState(false);
 
-  const [markDeliveredLoading, setMarkDeliveredLoading] = useState(false);
-  const [confirmPayLoading, setConfirmPayLoading] = useState(false);
-
-  // dispute
-  const [showDispute, setShowDispute] = useState(false);
-  const [disputeReason, setDisputeReason] = useState("");
-  const [disputeLoading, setDisputeLoading] = useState(false);
-  const [resolveLoading, setResolveLoading] = useState(false);
-
-  // ✅ alerts auto-dismiss (8s)
+  // auto-dismiss (8s)
   useEffect(() => {
     if (!error) return;
     const t = setTimeout(() => setError(null), 8000);
@@ -207,7 +158,7 @@ export default function DriverDeliveryDetailPage() {
     return () => clearTimeout(t);
   }, [msg]);
 
-  // ---------------- auth ----------------
+  // auth
   useEffect(() => {
     try {
       const raw = window.localStorage.getItem("incomeUser");
@@ -220,27 +171,12 @@ export default function DriverDeliveryDetailPage() {
     }
   }, [router]);
 
-  // ---------------- fetch ----------------
+  // fetch
   useEffect(() => {
     if (!user || !id) return;
     void fetchAll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, id]);
-
-  async function fetchSeller(sellerId: string) {
-    setSellerLoading(true);
-    try {
-      const { data, error } = await supabase.from("users").select("id,name,phone").eq("id", sellerId).maybeSingle();
-      if (error) {
-        console.warn(error);
-        setSeller(null);
-        return;
-      }
-      setSeller((data as any) || null);
-    } finally {
-      setSellerLoading(false);
-    }
-  }
 
   async function fetchAll() {
     setLoading(true);
@@ -257,6 +193,10 @@ export default function DriverDeliveryDetailPage() {
           from_address,
           to_address,
           note,
+          pickup_district,
+          pickup_khoroo,
+          dropoff_district,
+          dropoff_khoroo,
           pickup_lat,
           pickup_lng,
           dropoff_lat,
@@ -265,13 +205,7 @@ export default function DriverDeliveryDetailPage() {
           created_at,
           price_mnt,
           delivery_type,
-          chosen_driver_id,
-          seller_marked_paid,
-          driver_confirmed_payment,
-          closed_at,
-          dispute_reason,
-          dispute_opened_at,
-          seller_hidden
+          chosen_driver_id
         `
         )
         .eq("id", id)
@@ -284,152 +218,92 @@ export default function DriverDeliveryDetailPage() {
       }
 
       const d: DeliveryDetail = {
-        id: data.id,
-        seller_id: data.seller_id,
-        from_address: data.from_address,
-        to_address: data.to_address,
-        note: data.note,
+        id: (data as any).id,
+        seller_id: (data as any).seller_id,
+
+        from_address: (data as any).from_address ?? null,
+        to_address: (data as any).to_address ?? null,
+        note: (data as any).note ?? null,
+
+        pickup_district: (data as any).pickup_district ?? null,
+        pickup_khoroo: (data as any).pickup_khoroo ?? null,
+        dropoff_district: (data as any).dropoff_district ?? null,
+        dropoff_khoroo: (data as any).dropoff_khoroo ?? null,
 
         pickup_lat: (data as any).pickup_lat ?? null,
         pickup_lng: (data as any).pickup_lng ?? null,
         dropoff_lat: (data as any).dropoff_lat ?? null,
         dropoff_lng: (data as any).dropoff_lng ?? null,
 
-        status: data.status as DeliveryStatus,
-        created_at: data.created_at,
-        price_mnt: data.price_mnt,
-        delivery_type: data.delivery_type,
-        chosen_driver_id: data.chosen_driver_id,
+        status: (data as any).status as DeliveryStatus,
+        created_at: (data as any).created_at,
+        price_mnt: (data as any).price_mnt ?? null,
+        delivery_type: (data as any).delivery_type ?? null,
 
-        seller_marked_paid: !!data.seller_marked_paid,
-        driver_confirmed_payment: !!data.driver_confirmed_payment,
-        closed_at: data.closed_at,
-
-        dispute_reason: (data as any).dispute_reason ?? null,
-        dispute_opened_at: (data as any).dispute_opened_at ?? null,
-
-        seller_hidden: !!(data as any).seller_hidden,
+        chosen_driver_id: (data as any).chosen_driver_id ?? null,
       };
 
       setDelivery(d);
 
-      // ✅ seller info load
-      void fetchSeller(d.seller_id);
-
-      // my bid
+      // my bid (latest)
       const { data: b, error: e2 } = await supabase
         .from("driver_bids")
         .select("id, driver_id, delivery_id, created_at")
         .eq("delivery_id", d.id)
         .eq("driver_id", user!.id)
+        .order("created_at", { ascending: false })
+        .limit(1)
         .maybeSingle();
 
       if (e2) setMyBid(null);
       else setMyBid((b as any) || null);
-
-      // ✅ private info load (if allowed)
-      await maybeLoadPrivate(d);
     } finally {
       setLoading(false);
     }
   }
 
-  // ---------------- navigation ----------------
   function goBack() {
     if (backTab) return router.push(`/driver?tab=${encodeURIComponent(backTab)}`);
-    if (!delivery) return router.push("/driver?tab=OPEN");
+    if (!delivery) return router.push("/driver?tab=OFFERS");
     return router.push(`/driver?tab=${getDriverTabForStatus(delivery.status)}`);
   }
 
-  // ---------------- derived ----------------
-  const isChosenDriver = useMemo(() => {
-    if (!delivery || !user) return false;
-    return !!delivery.chosen_driver_id && delivery.chosen_driver_id === user.id;
-  }, [delivery, user]);
+  const b = delivery ? badge(delivery.status) : null;
 
-  const canBid = useMemo(() => {
+  const fromArea = delivery ? areaLine(delivery.pickup_district, delivery.pickup_khoroo) : "—";
+  const toArea = delivery ? areaLine(delivery.dropoff_district, delivery.dropoff_khoroo) : "—";
+
+  const isPending = useMemo(() => {
     if (!delivery) return false;
-    return delivery.status === "OPEN";
+    return delivery.status === "OPEN" && !!myBid;
+  }, [delivery, myBid]);
+
+  const canBid = useMemo(() => delivery?.status === "OPEN", [delivery]);
+
+  const isMine = !!delivery && !!user && delivery.chosen_driver_id === user.id;
+
+  // ✅ OPEN үед: private info = HIDE
+  const allowPrivate = delivery ? delivery.status !== "OPEN" && isMine : false;
+
+  const pickup = useMemo(() => {
+    if (!delivery) return null;
+    if (delivery.pickup_lat == null || delivery.pickup_lng == null) return null;
+    return { lat: delivery.pickup_lat, lng: delivery.pickup_lng };
   }, [delivery]);
 
-  const canMarkDelivered = useMemo(() => {
-    if (!delivery) return false;
-    return delivery.status === "ON_ROUTE" && isChosenDriver;
-  }, [delivery, isChosenDriver]);
-
-  const canOpenDispute = useMemo(() => {
-    if (!delivery) return false;
-    if (delivery.status === "DISPUTE" || delivery.status === "CLOSED" || delivery.status === "CANCELLED") return false;
-    return delivery.status === "ON_ROUTE" || delivery.status === "DELIVERED" || delivery.status === "PAID";
+  const dropoff = useMemo(() => {
+    if (!delivery) return null;
+    if (delivery.dropoff_lat == null || delivery.dropoff_lng == null) return null;
+    return { lat: delivery.dropoff_lat, lng: delivery.dropoff_lng };
   }, [delivery]);
 
-  const hasMap =
-    !!delivery &&
-    delivery.pickup_lat != null &&
-    delivery.pickup_lng != null &&
-    delivery.dropoff_lat != null &&
-    delivery.dropoff_lng != null;
-
-  const privateAllowed = useMemo(() => {
-    if (!delivery || !user) return false;
-    if (!isChosenDriver) return false;
-    return (
-      delivery.status === "ON_ROUTE" ||
-      delivery.status === "DELIVERED" ||
-      delivery.status === "PAID" ||
-      delivery.status === "DISPUTE" ||
-      delivery.status === "CLOSED"
-    );
-  }, [delivery, user, isChosenDriver]);
-
-  // ✅ Hook order fix: privateText isMemo MUST be above any early returns
-  const privateText = useMemo(() => {
-    if (!priv) return "";
-    const lines = [
-      priv.buyer_phone ? `Утас: ${priv.buyer_phone}` : null,
-      priv.to_detail ? `Нарийн хаяг: ${priv.to_detail}` : null,
-    ].filter(Boolean) as string[];
-    return lines.join("\n");
-  }, [priv]);
-
-  // ✅ fetch private only when allowed
-  async function maybeLoadPrivate(d: DeliveryDetail) {
-    if (!user) return;
-
-    const isMine = !!d.chosen_driver_id && d.chosen_driver_id === user.id;
-    const allowed =
-      d.status === "ON_ROUTE" ||
-      d.status === "DELIVERED" ||
-      d.status === "PAID" ||
-      d.status === "DISPUTE" ||
-      d.status === "CLOSED";
-
-    if (!isMine || !allowed) {
-      setPriv(null);
-      return;
-    }
-
-    setPrivLoading(true);
-    try {
-      const { data, error } = await supabase
-        .from("delivery_private")
-        .select("delivery_id,to_detail,buyer_phone")
-        .eq("delivery_id", d.id)
-        .maybeSingle();
-
-      if (error) {
-        console.error(error);
-        setPriv(null);
-        return;
-      }
-
-      setPriv((data as any) || null);
-    } finally {
-      setPrivLoading(false);
-    }
-  }
-
-  // ---------------- actions ----------------
+  // Google Maps link (pickup)
+  const pickupNavUrl = useMemo(() => {
+    if (!delivery) return null;
+    if (delivery.pickup_lat != null && delivery.pickup_lng != null) return mapsDirUrl(delivery.pickup_lat, delivery.pickup_lng);
+    if (delivery.from_address) return mapsSearchUrl(delivery.from_address);
+    return null;
+  }, [delivery]);
 
   async function placeBid() {
     if (!delivery || !user) return;
@@ -461,282 +335,43 @@ export default function DriverDeliveryDetailPage() {
     }
   }
 
-  // ✅ OPEN: cancel bid
-  // ✅ ASSIGNED + chosen driver: decline => OPEN + chosen_driver_id=null
   async function cancelBid() {
     if (!delivery || !user) return;
-    if (cancelBidLoading) return;
+    if (!canBid) return setError("Энэ төлөв дээр хүсэлт цуцлах боломжгүй.");
+    if (!myBid) return setError("Та хүсэлт илгээгүй байна.");
+    if (cancelLoading) return;
 
-    setCancelBidLoading(true);
+    setCancelLoading(true);
     setError(null);
     setMsg(null);
 
     try {
-      if (delivery.status === "OPEN") {
-        if (!myBid) return setError("Та энэ хүргэлтэд хүсэлт гаргаагүй байна.");
+      const { error } = await supabase
+        .from("driver_bids")
+        .delete()
+        .eq("delivery_id", delivery.id)
+        .eq("driver_id", user.id);
 
-        const { error } = await supabase.from("driver_bids").delete().eq("id", myBid.id).eq("driver_id", user.id);
-
-        if (error) {
-          console.error(error);
-          setError(pickErr(error, "Хүсэлт цуцлахад алдаа гарлаа."));
-          return;
-        }
-
-        setMyBid(null);
-        setMsg("Хүсэлт цуцлагдлаа.");
-        return;
-      }
-
-      if (delivery.status === "ASSIGNED" && delivery.chosen_driver_id === user.id) {
-        if (myBid) {
-          await supabase.from("driver_bids").delete().eq("id", myBid.id).eq("driver_id", user.id);
-          setMyBid(null);
-        }
-
-        const { data, error } = await supabase
-          .from("deliveries")
-          .update({ status: "OPEN", chosen_driver_id: null })
-          .eq("id", delivery.id)
-          .eq("chosen_driver_id", user.id)
-          .select("id,status,chosen_driver_id")
-          .maybeSingle();
-
-        if (error || !data) {
-          console.error(error);
-          setError(pickErr(error, "Татгалзахад алдаа гарлаа."));
-          return;
-        }
-
-        setDelivery((d) => (d ? { ...d, status: "OPEN", chosen_driver_id: null } : d));
-        setPriv(null);
-
-        setMsg("Татгалзлаа. Хүргэлт дахин нээлттэй боллоо.");
-        router.push("/driver?tab=OPEN");
-        router.refresh();
-        return;
-      }
-
-      setError("Энэ төлөв дээр цуцлах боломжгүй.");
-    } finally {
-      setCancelBidLoading(false);
-    }
-  }
-
-  // ✅ ON_ROUTE -> DELIVERED
-  async function markDelivered() {
-    if (!delivery || !user) return;
-    if (!canMarkDelivered) return setError("Энэ хүргэлт танд оноогдоогүй эсвэл төлөв буруу байна.");
-    if (markDeliveredLoading) return;
-
-    setMarkDeliveredLoading(true);
-    setError(null);
-    setMsg(null);
-
-    try {
-      const { data, error } = await supabase
-        .from("deliveries")
-        .update({ status: "DELIVERED" })
-        .eq("id", delivery.id)
-        .eq("status", "ON_ROUTE")
-        .eq("chosen_driver_id", user.id)
-        .select("id,status,chosen_driver_id")
-        .maybeSingle();
-
-      if (error || !data) {
+      if (error) {
         console.error(error);
-        setError(pickErr(error, "Хүргэсэн гэж тэмдэглэхэд алдаа гарлаа."));
+        setError(pickErr(error, "Хүсэлт цуцлахад алдаа гарлаа."));
         return;
       }
 
-      if ((data.status as DeliveryStatus) !== "DELIVERED") {
-        setError("Шинэ төлөв баталгаажсангүй. Дахин оролдоно уу.");
-        return;
-      }
-
-      const nd: DeliveryDetail = { ...delivery, status: "DELIVERED", chosen_driver_id: (data as any).chosen_driver_id };
-
-      setDelivery(nd);
-      void maybeLoadPrivate(nd);
-
-      setMsg("Хүргэсэн гэж тэмдэглэлээ.");
-      router.push("/driver?tab=DELIVERED");
-      router.refresh();
+      setMyBid(null);
+      setMsg("Хүсэлт цуцлагдлаа.");
     } finally {
-      setMarkDeliveredLoading(false);
+      setCancelLoading(false);
     }
   }
-
-  // ---- legacy functions kept as-is (PAID/DISPUTE/CLOSED) ----
-  async function confirmPaymentReceived() {
-    if (!delivery || !user) return;
-    if (confirmPayLoading) return;
-
-    if (delivery.status !== "PAID") return setError("Зөвхөн 'Төлсөн' үед төлбөр хүлээн авснаа батална.");
-    if (!isChosenDriver) return setError("Энэ хүргэлт танд оноогдоогүй байна.");
-    if (delivery.driver_confirmed_payment) return setError("Төлбөр аль хэдийн баталгаажсан байна.");
-
-    setConfirmPayLoading(true);
-    setError(null);
-    setMsg(null);
-
-    try {
-      const closedAt = new Date().toISOString();
-
-      const { data, error } = await supabase
-        .from("deliveries")
-        .update({ driver_confirmed_payment: true, status: "CLOSED", closed_at: closedAt })
-        .eq("id", delivery.id)
-        .eq("chosen_driver_id", user.id)
-        .eq("status", "PAID")
-        .eq("driver_confirmed_payment", false)
-        .select("id,status,driver_confirmed_payment,closed_at,seller_marked_paid,chosen_driver_id")
-        .maybeSingle();
-
-      if (error || !data) {
-        console.error(error);
-        setError(pickErr(error, "Төлбөр батлахад алдаа гарлаа."));
-        return;
-      }
-
-      if ((data.status as DeliveryStatus) !== "CLOSED") {
-        setError("Хаагдсан төлөв баталгаажсангүй. Дахин оролдоно уу.");
-        return;
-      }
-
-      const nd: DeliveryDetail = {
-        ...delivery,
-        driver_confirmed_payment: true,
-        status: "CLOSED",
-        closed_at: (data as any).closed_at ?? closedAt,
-        seller_marked_paid: !!(data as any).seller_marked_paid,
-        chosen_driver_id: (data as any).chosen_driver_id ?? delivery.chosen_driver_id,
-      };
-
-      setDelivery(nd);
-      void maybeLoadPrivate(nd);
-
-      setMsg("Төлбөр хүлээн авснаа баталлаа.");
-      router.push("/driver?tab=CLOSED");
-      router.refresh();
-    } finally {
-      setConfirmPayLoading(false);
-    }
-  }
-
-  async function openDispute() {
-    if (!delivery) return;
-
-    const reason = disputeReason.trim();
-    if (!reason) return setError("Маргааны шалтгаанаа бичнэ үү.");
-    if (!canOpenDispute) return setError("Энэ төлөв дээр маргаан нээх боломжгүй.");
-    if (disputeLoading) return;
-
-    setDisputeLoading(true);
-    setError(null);
-    setMsg(null);
-
-    try {
-      const openedAt = new Date().toISOString();
-
-      const { data, error } = await supabase
-        .from("deliveries")
-        .update({ status: "DISPUTE", dispute_reason: reason, dispute_opened_at: openedAt })
-        .eq("id", delivery.id)
-        .in("status", ["ON_ROUTE", "DELIVERED", "PAID"] as any)
-        .select("id,status,dispute_reason,dispute_opened_at,chosen_driver_id")
-        .maybeSingle();
-
-      if (error || !data) {
-        console.error(error);
-        setError(pickErr(error, "Маргаан нээхэд алдаа гарлаа."));
-        return;
-      }
-
-      if ((data.status as DeliveryStatus) !== "DISPUTE") {
-        setError("Маргаан төлөв баталгаажсангүй. Дахин оролдоно уу.");
-        return;
-      }
-
-      const nd: DeliveryDetail = {
-        ...delivery,
-        status: "DISPUTE",
-        dispute_reason: (data as any).dispute_reason ?? reason,
-        dispute_opened_at: (data as any).dispute_opened_at ?? openedAt,
-        chosen_driver_id: (data as any).chosen_driver_id ?? delivery.chosen_driver_id,
-      };
-
-      setDelivery(nd);
-      void maybeLoadPrivate(nd);
-
-      setShowDispute(false);
-      setDisputeReason("");
-      setMsg("Маргаан нээгдлээ.");
-      router.push("/driver?tab=DISPUTE");
-      router.refresh();
-    } finally {
-      setDisputeLoading(false);
-    }
-  }
-
-  async function resolveDispute() {
-    if (!delivery) return;
-    if (delivery.status !== "DISPUTE") return;
-    if (resolveLoading) return;
-
-    setResolveLoading(true);
-    setError(null);
-    setMsg(null);
-
-    try {
-      const closedAt = new Date().toISOString();
-
-      const { data, error } = await supabase
-        .from("deliveries")
-        .update({ status: "CLOSED", closed_at: closedAt })
-        .eq("id", delivery.id)
-        .eq("status", "DISPUTE")
-        .select("id,status,closed_at,chosen_driver_id")
-        .maybeSingle();
-
-      if (error || !data) {
-        console.error(error);
-        setError(pickErr(error, "Маргааныг шийдэгдсэн болгоход алдаа гарлаа."));
-        return;
-      }
-
-      if ((data.status as DeliveryStatus) !== "CLOSED") {
-        setError("Хаагдсан төлөв баталгаажсангүй. Дахин оролдоно уу.");
-        return;
-      }
-
-      const nd: DeliveryDetail = {
-        ...delivery,
-        status: "CLOSED",
-        closed_at: (data as any).closed_at ?? closedAt,
-        chosen_driver_id: (data as any).chosen_driver_id ?? delivery.chosen_driver_id,
-      };
-
-      setDelivery(nd);
-      void maybeLoadPrivate(nd);
-
-      setMsg("Маргаан шийдэгдлээ. Хүргэлт хаагдлаа.");
-      router.push("/driver?tab=CLOSED");
-      router.refresh();
-    } finally {
-      setResolveLoading(false);
-    }
-  }
-
-  // ---------------- UI ----------------
 
   if (loading) {
     return (
       <div className="min-h-screen bg-slate-50">
-        <div className="max-w-3xl mx-auto px-4 py-6 space-y-4">
-          <div className="h-10 w-32 bg-slate-200 rounded-xl animate-pulse" />
-          <div className="h-28 bg-white border border-slate-200 rounded-2xl animate-pulse" />
-          <div className="h-44 bg-white border border-slate-200 rounded-2xl animate-pulse" />
+        <div className="mx-auto max-w-3xl space-y-4 px-4 py-6">
+          <div className="h-10 w-32 rounded-xl bg-slate-200 animate-pulse" />
+          <div className="h-32 rounded-2xl border border-slate-200 bg-white animate-pulse" />
+          <div className="h-64 rounded-2xl border border-slate-200 bg-white animate-pulse" />
         </div>
       </div>
     );
@@ -744,23 +379,9 @@ export default function DriverDeliveryDetailPage() {
 
   if (!user) return null;
 
-  const t = typeLabel(delivery?.delivery_type ?? null);
-  const b = delivery ? badge(delivery.status) : null;
-
-  const showSellerCard =
-    !!delivery &&
-    isChosenDriver &&
-    (delivery.status === "ASSIGNED" ||
-      delivery.status === "ON_ROUTE" ||
-      delivery.status === "DELIVERED" ||
-      delivery.status === "PAID" ||
-      delivery.status === "DISPUTE" ||
-      delivery.status === "CLOSED");
-
   return (
     <div className="min-h-screen bg-slate-50">
-      <main className="max-w-3xl mx-auto px-4 py-6 space-y-4">
-        {/* header */}
+      <main className="mx-auto max-w-3xl space-y-4 px-4 py-6">
         <div className="flex items-center justify-between gap-3">
           <button
             onClick={goBack}
@@ -768,22 +389,23 @@ export default function DriverDeliveryDetailPage() {
           >
             ← Буцах
           </button>
-
-          {delivery && b && (
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-slate-500">{t.icon}</span>
-              <span className={`text-[11px] px-3 py-1.5 rounded-full border ${b.cls}`}>{b.text}</span>
-            </div>
-          )}
         </div>
 
-        {/* alerts */}
         {error && (
-          <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>
+          <div className="flex items-start justify-between gap-3 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            <div className="pr-2">{error}</div>
+            <button onClick={() => setError(null)} className="rounded-lg px-2 py-0.5 hover:bg-red-100" aria-label="close">
+              ✕
+            </button>
+          </div>
         )}
+
         {msg && (
-          <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
-            {msg}
+          <div className="flex items-start justify-between gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
+            <div className="pr-2">{msg}</div>
+            <button onClick={() => setMsg(null)} className="rounded-lg px-2 py-0.5 hover:bg-emerald-100" aria-label="close">
+              ✕
+            </button>
           </div>
         )}
 
@@ -793,253 +415,128 @@ export default function DriverDeliveryDetailPage() {
           </div>
         ) : (
           <>
-            {/* main card */}
-            <section className="rounded-2xl border border-slate-200 bg-white p-4 space-y-3">
-              <div className="flex items-start justify-between gap-4">
-                <div className="space-y-1">
-                  <h1 className="text-lg font-semibold text-slate-900">
-                    {t.label} #{delivery.id.slice(0, 6)}
-                  </h1>
-                  <p className="text-xs text-slate-500">Үүсгэсэн: {fmtDT(delivery.created_at)}</p>
-                </div>
+            <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50/70 px-3 py-1 text-xs font-extrabold text-emerald-800">
+                      {fmtPrice(delivery.price_mnt)}
+                    </span>
 
-                <div className="text-right">
-                  <div className="text-xs text-slate-500">Үнэ</div>
-                  <div className="text-base font-semibold text-slate-900">{fmtPrice(delivery.price_mnt)}</div>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                  <div className="text-[11px] text-slate-500">АВАХ</div>
-                  <div className="text-sm text-slate-900 mt-1">{delivery.from_address || "—"}</div>
-                </div>
-
-                <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                  <div className="text-[11px] text-slate-500">ХҮРГЭХ</div>
-                  <div className="text-sm text-slate-900 mt-1">{delivery.to_address || "—"}</div>
-                </div>
-              </div>
-
-              {delivery.note && (
-                <div className="rounded-xl border border-slate-200 bg-white p-3">
-                  <div className="text-[11px] text-slate-500">Тайлбар</div>
-                  <div className="text-sm text-slate-900 mt-1 whitespace-pre-wrap">{delivery.note}</div>
-                </div>
-              )}
-            </section>
-
-            {/* ✅ Seller card (only when chosen driver) */}
-            {showSellerCard && (
-              <section className="rounded-2xl border border-slate-200 bg-white p-4 space-y-3">
-                <div className="flex items-center justify-between gap-3">
-                  <h2 className="text-sm font-semibold text-slate-900">Худалдагч</h2>
-                  {seller?.phone ? (
-                    <a
-                      href={`tel:${seller.phone}`}
-                      className="rounded-xl bg-slate-900 px-4 py-2 text-xs font-semibold text-white hover:bg-slate-800"
-                    >
-                      Залгах
-                    </a>
-                  ) : null}
-                </div>
-
-                {sellerLoading ? (
-                  <div className="text-xs text-slate-500">Ачаалж байна…</div>
-                ) : (
-                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 space-y-1">
-                    <div className="text-xs text-slate-700">
-                      Нэр: <span className="font-semibold">{seller?.name || "—"}</span>
-                    </div>
-                    <div className="text-xs text-slate-700">
-                      Утас: <span className="font-semibold">{seller?.phone || "—"}</span>
-                    </div>
-                  </div>
-                )}
-              </section>
-            )}
-
-            {/* ✅ private info card (only allowed) */}
-            <section className="rounded-2xl border border-slate-200 bg-white p-4 space-y-3">
-              <div className="flex items-center justify-between gap-3">
-                <h2 className="text-sm font-semibold text-slate-900">Хүлээн авагч</h2>
-
-                {privateAllowed && (
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      const ok = await copyText(privateText);
-                      setMsg(ok ? "Хууллаа." : "Хуулах боломжгүй байна.");
-                    }}
-                    disabled={privLoading || !priv}
-                    className="text-[11px] px-3 py-1.5 rounded-full border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 disabled:opacity-60"
-                  >
-                    Хуулах
-                  </button>
-                )}
-              </div>
-
-              {!privateAllowed ? (
-                <div className="text-xs text-slate-600">
-                  Нарийн хаяг/утас нь зөвхөн <span className="font-semibold">“Замд”</span> (эсвэл түүнээс хойш) үед, мөн
-                  зөвхөн <span className="font-semibold">оноогдсон жолоочид</span> харагдана.
-                </div>
-              ) : privLoading ? (
-                <div className="text-xs text-slate-500">Ачаалж байна…</div>
-              ) : !priv ? (
-                <div className="text-xs text-slate-500">Нарийн мэдээлэл олдсонгүй.</div>
-              ) : (
-                <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 space-y-1">
-                  <div className="text-xs text-slate-700">{priv.buyer_phone ? `📞 ${priv.buyer_phone}` : "📞 —"}</div>
-                  {priv.to_detail && <div className="text-xs text-slate-700 whitespace-pre-wrap">{priv.to_detail}</div>}
-                </div>
-              )}
-            </section>
-
-            {/* map preview */}
-            {hasMap && (
-              <section className="rounded-2xl border border-slate-200 bg-white p-4 space-y-3">
-                <h2 className="text-sm font-semibold text-slate-900">Хүргэлтийн чиглэл</h2>
-
-                {/* ✅ FIX: height prop-г component руу дамжуулахгүй. Wrapper дээр өндөр өгнө. */}
-                <div className="overflow-hidden rounded-xl border border-slate-200" style={{ height: 260 }}>
-                  <DeliveryRouteMap
-                    pickup={{ lat: delivery.pickup_lat!, lng: delivery.pickup_lng! }}
-                    dropoff={{ lat: delivery.dropoff_lat!, lng: delivery.dropoff_lng! }}
-                  />
-                </div>
-              </section>
-            )}
-
-            {/* actions */}
-            <section className="rounded-2xl border border-slate-200 bg-white p-4 space-y-3">
-              <h2 className="text-sm font-semibold text-slate-900">Үйлдэл</h2>
-
-              <div className="flex flex-wrap items-center gap-2">
-                {delivery.status === "OPEN" && (
-                  <>
-                    {!myBid ? (
-                      <button
-                        type="button"
-                        onClick={() => void placeBid()}
-                        disabled={bidLoading}
-                        className="text-xs px-4 py-2 rounded-xl bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-60"
-                      >
-                        {bidLoading ? "Илгээж байна…" : "Авах хүсэлт илгээх"}
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => void cancelBid()}
-                        disabled={cancelBidLoading}
-                        className="text-xs px-4 py-2 rounded-xl border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 disabled:opacity-60"
-                      >
-                        {cancelBidLoading ? "Цуцалж байна…" : "Хүсэлт цуцлах"}
-                      </button>
+                    {b && (
+                      <span className={`inline-flex items-center rounded-full border px-3 py-1 text-xs font-semibold ${b.cls}`}>
+                        {b.text}
+                      </span>
                     )}
-                  </>
-                )}
 
-                {delivery.status === "ASSIGNED" && (
-                  <>
-                    <div className="text-xs text-slate-600 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
-                      Худалдагч “Жолооч барааг авч явлаа” дарсны дараа “Замд” руу шилжинэ.
+                    <span className="text-xs text-slate-500">{fmtDT(delivery.created_at)}</span>
+                  </div>
+
+                  <div className="mt-2 text-sm font-semibold text-slate-900">
+                    {fromArea} <span className="text-slate-400">→</span> {toArea}
+                  </div>
+
+                  <div className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50/40 px-3 py-2">
+                    <div className="text-sm font-semibold text-slate-900">{shorten(delivery.note, 140)}</div>
+                  </div>
+
+                  {/* ✅ OPEN үед: “Дэлгэрэнгүй нь PICKUP дээр” */}
+                  {delivery.status === "OPEN" && (
+                    <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2">
+                      <div className="text-xs leading-relaxed text-slate-700">
+                        ℹ️ Худалдагч таныг сонговол дэлгэрэнгүй хаяг болон навигац{" "}
+                        <span className="font-semibold">📥 Ирж аваарай</span> таб дээр гарна.
+                      </div>
                     </div>
+                  )}
 
-                    {isChosenDriver && (
-                      <button
-                        type="button"
-                        onClick={() => void cancelBid()}
-                        disabled={cancelBidLoading}
-                        className="text-xs px-4 py-2 rounded-xl border border-rose-300 bg-rose-50 text-rose-700 hover:bg-rose-100 disabled:opacity-60"
-                      >
-                        {cancelBidLoading ? "Татгалзаж байна…" : "Татгалзах"}
-                      </button>
-                    )}
-                  </>
-                )}
+                  {/* ✅ OPEN actions */}
+                  {delivery.status === "OPEN" && (
+                    <div className="mt-4 flex flex-wrap items-center gap-2">
+                      {!isPending ? (
+                        <button
+                          type="button"
+                          onClick={() => void placeBid()}
+                          disabled={bidLoading}
+                          className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-900 hover:bg-emerald-100 disabled:opacity-60"
+                        >
+                          {bidLoading ? "Түр хүлээнэ үү…" : "✋ Авъя"}
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => void cancelBid()}
+                          disabled={cancelLoading}
+                          className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-100 disabled:opacity-60"
+                        >
+                          {cancelLoading ? "Түр хүлээнэ үү…" : "🗑️ Хүсэлт цуцлах"}
+                        </button>
+                      )}
 
-                {delivery.status === "ON_ROUTE" && (
-                  <button
-                    type="button"
-                    onClick={() => void markDelivered()}
-                    disabled={!canMarkDelivered || markDeliveredLoading}
-                    className="text-xs px-4 py-2 rounded-xl bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-60 disabled:cursor-not-allowed"
-                  >
-                    {markDeliveredLoading ? "Тэмдэглэж байна…" : "Хүргэлсэн"}
-                  </button>
-                )}
+                      {isPending && <span className="text-xs text-slate-500">💤 Хүсэлт илгээсэн — сонголт хүлээж байна</span>}
+                    </div>
+                  )}
 
-                {(delivery.status === "ON_ROUTE" || delivery.status === "DELIVERED" || delivery.status === "PAID") && (
-                  <button
-                    type="button"
-                    onClick={() => setShowDispute(true)}
-                    className="text-xs px-4 py-2 rounded-xl border border-rose-300 bg-rose-50 text-rose-700 hover:bg-rose-100"
-                  >
-                    Маргаан
-                  </button>
-                )}
+                  {/* ✅ ASSIGNED минийх бол: pickup address + nav */}
+                  {allowPrivate && delivery.status === "ASSIGNED" && (
+                    <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-3">
+                      <div className="text-[11px] text-slate-500">ОЧИЖ АВАХ (ХУДАЛДАГЧ)</div>
+                      <div className="mt-1 text-sm font-semibold text-slate-900">{delivery.from_address || "—"}</div>
 
-                {delivery.status === "PAID" && (
-                  <button
-                    type="button"
-                    onClick={() => void confirmPaymentReceived()}
-                    disabled={confirmPayLoading || !isChosenDriver || delivery.driver_confirmed_payment}
-                    className="text-xs px-4 py-2 rounded-xl bg-slate-900 text-white hover:bg-slate-800 disabled:opacity-60 disabled:cursor-not-allowed"
-                  >
-                    {confirmPayLoading ? "Баталж байна…" : "Төлбөр хүлээн авсан"}
-                  </button>
-                )}
+                      <div className="mt-2 text-[11px] text-slate-500">
+                        ⚠️ Таны утсанд Google Maps апп суусан байх ёстой. (Суусан бол шууд навигац нээгдэнэ.)
+                      </div>
 
-                {delivery.status === "DISPUTE" && (
-                  <button
-                    type="button"
-                    onClick={() => void resolveDispute()}
-                    disabled={resolveLoading}
-                    className="text-xs px-4 py-2 rounded-xl bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-60 disabled:cursor-not-allowed"
-                  >
-                    {resolveLoading ? "Тэмдэглэж байна…" : "Шийдэгдсэн"}
-                  </button>
-                )}
+                      {pickupNavUrl ? (
+                        <a
+                          href={pickupNavUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="mt-3 inline-flex w-full items-center justify-center rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-extrabold text-emerald-900 hover:bg-emerald-100"
+                        >
+                          🧭 Худалдагчийн хаяг руу очих
+                        </a>
+                      ) : (
+                        <div className="mt-3 text-xs text-slate-500">Байршлын мэдээлэл олдсонгүй.</div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* ✅ бусдынх бол private hide */}
+                  {delivery.status !== "OPEN" && !isMine && (
+                    <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2">
+                      <div className="text-xs text-slate-700">ℹ️ Энэ хүргэлт аль хэдийн сонгогдсон байна.</div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="hidden sm:block text-right">
+                  <div className="text-[11px] text-slate-500">ID</div>
+                  <div className="font-mono text-xs text-slate-700">{delivery.id.slice(0, 8)}</div>
+                </div>
               </div>
             </section>
 
-            {/* dispute modal */}
-            {showDispute && (
-              <div className="fixed inset-0 z-20 flex items-center justify-center bg-black/30 px-4">
-                <div className="max-w-md w-full rounded-2xl bg-white shadow-lg border border-slate-200 px-4 py-4 space-y-3">
-                  <h3 className="text-sm font-semibold text-slate-900">Маргаан үүсгэх (driver)</h3>
-                  <p className="text-xs text-slate-600">Товч, тодорхой шалтгаанаа бичнэ үү.</p>
-
-                  <textarea
-                    value={disputeReason}
-                    onChange={(e) => setDisputeReason(e.target.value)}
-                    rows={4}
-                    className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-rose-500 focus:border-rose-500"
-                    placeholder="Юу болсон талаар…"
-                  />
-
-                  <div className="flex items-center justify-end gap-2 pt-1">
-                    <button
-                      type="button"
-                      onClick={() => setShowDispute(false)}
-                      disabled={disputeLoading}
-                      className="text-[11px] px-3 py-1.5 rounded-full border border-slate-200 text-slate-600 hover:bg-slate-50"
-                    >
-                      Болих
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => void openDispute()}
-                      disabled={disputeLoading}
-                      className="text-[11px] px-3 py-1.5 rounded-full bg-rose-600 text-white hover:bg-rose-700 disabled:opacity-60"
-                    >
-                      {disputeLoading ? "Илгээж байна…" : "Маргаан нээх"}
-                    </button>
-                  </div>
+            {/* ✅ Map: OPEN үед HIDE. Зөвхөн минийх дээр (private) харуулна */}
+            {allowPrivate && pickup ? (
+              <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                <div className="border-b border-slate-200 px-4 py-3">
+                  <div className="text-sm font-semibold text-slate-900">Газрын зураг</div>
+                  <div className="mt-0.5 text-xs text-slate-500">Очиж авах байршил</div>
                 </div>
-              </div>
+
+                {/* ASSIGNED үед зөвхөн pickup point харуулна */}
+                <DeliveryRouteMap pickup={pickup} dropoff={delivery.status === "ON_ROUTE" ? dropoff : null} aspectRatio="16 / 9" />
+              </section>
+            ) : (
+              <section className="rounded-2xl border border-slate-200 bg-white px-4 py-6">
+                <div className="text-sm font-semibold text-slate-900">Газрын зураг</div>
+                <div className="mt-1 text-sm text-slate-600">
+                  {delivery?.status === "OPEN"
+                    ? "Худалдагч таныг сонгосны дараа газрын зураг харагдана."
+                    : "Координатын мэдээлэл олдсонгүй."}
+                </div>
+              </section>
             )}
           </>
         )}
