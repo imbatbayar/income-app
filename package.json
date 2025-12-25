@@ -6,7 +6,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint",
+    "lint": "eslint .",
     "gen:projects": "node ./scripts/generate-projects.mjs"
   },
   "dependencies": {
@@ -14,8 +14,8 @@
     "html-to-image": "^1.11.13",
     "leaflet": "^1.9.4",
     "next": "16.0.7",
-    "react": "19.2.0",
-    "react-dom": "19.2.0",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
     "react-leaflet": "^5.0.0"
   },
   "devDependencies": {

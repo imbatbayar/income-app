@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
+import TahiHeader from "@/app/components/Header/TahiHeader";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -17,7 +18,7 @@ const siteUrl =
 
 export const metadata: Metadata = {
   metadataBase: new URL(siteUrl),
-  title: "INCOME — Хүргэлтийн marketplace",
+  title: "TAHI — Smart Delivery & Pickup",
   description: "Хүргэлт үүсгээд жолоочоор хүргүүлнэ.",
 };
 
@@ -29,7 +30,8 @@ export default function RootLayout({
   return (
     <html lang="mn">
       <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
-        {children}
+        <TahiHeader />
+        <div className="pt-16">{children}</div>
       </body>
     </html>
   );

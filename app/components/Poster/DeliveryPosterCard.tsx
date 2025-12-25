@@ -2,8 +2,8 @@
 
 import DeliveryRouteMap from "@/app/components/Map/DeliveryRouteMap";
 
-type DeliveryPosterData = {
-  id: string;
+export type DeliveryPosterData = {
+  id: string | number;
   price_mnt: number | null;
   note: string | null;
   pickup_district: string | null;
@@ -17,8 +17,17 @@ type DeliveryPosterData = {
 };
 
 function money(n: number | null | undefined) {
-  if (n == null) return "—";
+  if (n == null || Number.isNaN(Number(n))) return "—";
   return `${Number(n).toLocaleString("mn-MN")}₮`;
+}
+
+function toNum(v: unknown) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function inRangeLatLng(lat: number, lng: number) {
+  return lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180;
 }
 
 function Row({ label, value }: { label: string; value: string }) {
@@ -34,21 +43,53 @@ function Row({ label, value }: { label: string; value: string }) {
   );
 }
 
-export default function DeliveryPosterCard({ d }: { d: DeliveryPosterData }) {
+/**
+ * ✅ Compatibility fix:
+ * - Зарим газар <DeliveryPosterCard delivery={...} /> гэж дууддаг.
+ * - Зарим газар <DeliveryPosterCard d={...} /> гэж дууддаг.
+ * Энэ component 2 хэлбэрийг хоёуланг нь дэмжинэ.
+ */
+export default function DeliveryPosterCard({
+  d,
+  delivery,
+}: {
+  d?: DeliveryPosterData;
+  delivery?: DeliveryPosterData;
+}) {
+  const data = (d ?? delivery) as DeliveryPosterData | undefined;
+
+  // хамгаалалт (хэрэв өгөгдөл ирээгүй бол)
+  if (!data) {
+    return (
+      <div className="w-[1080px] h-[1080px] bg-[#f6f7f9] p-[44px] rounded-[36px] overflow-hidden flex items-center justify-center">
+        <div className="text-[22px] font-[900] text-[#0f172a] opacity-70">
+          Poster өгөгдөл олдсонгүй
+        </div>
+      </div>
+    );
+  }
+
+  const pLat = toNum(data.pickup_lat);
+  const pLng = toNum(data.pickup_lng);
+  const dLat = toNum(data.dropoff_lat);
+  const dLng = toNum(data.dropoff_lng);
+
   const hasMap =
-    Number.isFinite(Number(d.pickup_lat)) &&
-    Number.isFinite(Number(d.pickup_lng)) &&
-    Number.isFinite(Number(d.dropoff_lat)) &&
-    Number.isFinite(Number(d.dropoff_lng));
+    pLat != null &&
+    pLng != null &&
+    dLat != null &&
+    dLng != null &&
+    inRangeLatLng(pLat, pLng) &&
+    inRangeLatLng(dLat, dLng);
 
   const fromText =
-    (d.pickup_district || "—") +
-    (d.pickup_khoroo ? ` · ${d.pickup_khoroo}` : "");
+    (data.pickup_district || "—") +
+    (data.pickup_khoroo ? ` · ${data.pickup_khoroo}` : "");
   const toText =
-    (d.dropoff_district || "—") +
-    (d.dropoff_khoroo ? ` · ${d.dropoff_khoroo}` : "");
+    (data.dropoff_district || "—") +
+    (data.dropoff_khoroo ? ` · ${data.dropoff_khoroo}` : "");
 
-  const noteText = (d.note || "").trim() || "—";
+  const noteText = (data.note || "").trim() || "—";
 
   return (
     <div className="w-[1080px] h-[1080px] bg-[#f6f7f9] p-[44px] rounded-[36px] overflow-hidden">
@@ -67,12 +108,17 @@ export default function DeliveryPosterCard({ d }: { d: DeliveryPosterData }) {
         <div className="rounded-[22px] overflow-hidden border border-[#eef2f7]">
           {hasMap ? (
             <DeliveryRouteMap
-              pickup={{ lat: Number(d.pickup_lat), lng: Number(d.pickup_lng) }}
-              dropoff={{ lat: Number(d.dropoff_lat), lng: Number(d.dropoff_lng) }}
+              pickup={{ lat: pLat!, lng: pLng! }}
+              dropoff={{ lat: dLat!, lng: dLng! }}
               aspectRatio="16/9"
             />
           ) : (
-            <div className="w-full" style={{ aspectRatio: "16/9" }} />
+            <div
+              className="w-full bg-[#f1f5f9] flex items-center justify-center text-[#64748b] font-[800]"
+              style={{ aspectRatio: "16/9" }}
+            >
+              Газрын зураг байхгүй
+            </div>
           )}
         </div>
 
@@ -90,23 +136,20 @@ export default function DeliveryPosterCard({ d }: { d: DeliveryPosterData }) {
             <div className="text-[14px] font-[900] opacity-80">Үнэ</div>
 
             <div className="mt-[6px] text-[60px] font-[900] leading-none">
-              {money(d.price_mnt)}
+              {money(data.price_mnt)}
             </div>
 
-            {/* ✅ Үнийн доорх зөв мессеж (ганцхан) */}
             <div className="mt-[10px] text-[15px] font-[800] leading-[1.35] text-white/90">
               Та INCOME апп-ыг суулгаснаар хүргэлт хийлгэх саналуудыг дэлгэрэнгүй
               үзэж болно.
             </div>
-
-            {/* ❌ давхардаж байсан “пост хийгээрэй” мессежийг постер дээрээс авсан */}
           </div>
         </div>
 
         {/* Footer id */}
         <div className="mt-[14px] rounded-[14px] bg-[#e8f5ec] border border-[#bfe7c9] px-[14px] py-[10px]">
           <div className="text-[12px] font-[900] text-[#166534]">
-            #INCOME • {d.id}
+            #INCOME • {String(data.id)}
           </div>
         </div>
       </div>

@@ -3,7 +3,7 @@
 import "leaflet/dist/leaflet.css";
 
 import L from "leaflet";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { MapContainer, TileLayer, Polyline, Marker, Tooltip, useMap } from "react-leaflet";
 
 type LatLng = { lat: number; lng: number };
@@ -38,13 +38,18 @@ async function fetchOsrmRoute(pickup: LatLng, dropoff: LatLng) {
 
   const data = await res.json();
   const coords = data?.routes?.[0]?.geometry?.coordinates as [number, number][] | undefined;
-
   if (!coords?.length) return null;
 
+  // OSRM: [lng, lat] -> Leaflet: [lat, lng]
   return coords.map(([lng, lat]) => [lat, lng] as [number, number]);
 }
 
-function FitToPath({
+/**
+ * ✅ TS-safe: map instance-аа useMap() дотроос авна
+ * ✅ ResizeObserver + window resize дээр invalidateSize()
+ * ✅ path / pickup / dropoff солигдоход fitBounds хийж өгнө
+ */
+function AutoFitAndResize({
   pickup,
   dropoff,
   path,
@@ -59,13 +64,13 @@ function FitToPath({
   const hasPickup = isValid(pickup);
   const hasDropoff = isValid(dropoff);
 
-  function fitNow() {
+  const fitNow = () => {
     if (path && path.length >= 2) {
       const b = L.latLngBounds(path.map((p) => L.latLng(p[0], p[1])));
       map.fitBounds(b, {
         padding: [paddingPx, paddingPx],
         animate: true,
-        duration: 0.35,
+        duration: 0.25,
         maxZoom: 16,
       });
       return;
@@ -78,7 +83,7 @@ function FitToPath({
       map.fitBounds(b.pad(0.18), {
         padding: [paddingPx, paddingPx],
         animate: true,
-        duration: 0.35,
+        duration: 0.25,
         maxZoom: 16,
       });
       return;
@@ -86,11 +91,11 @@ function FitToPath({
 
     if (hasPickup || hasDropoff) {
       const one = (hasPickup ? pickup : dropoff) as LatLng;
-      map.setView([one.lat, one.lng], 14, { animate: true, duration: 0.3 });
+      map.setView([one.lat, one.lng], 14, { animate: true, duration: 0.2 });
     }
-  }
+  };
 
-  // popup/scale дотор төвлөрөл
+  // mount + өгөгдөл өөрчлөгдөх үед fit + invalidate
   useEffect(() => {
     map.invalidateSize();
     fitNow();
@@ -104,10 +109,10 @@ function FitToPath({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [map, pickup, dropoff, path, paddingPx]);
 
-  // container хэмжээ өөрчлөгдөх үед дахин fit
+  // resize дээр (container + parent хоёуланг нь ажиглана)
   useEffect(() => {
-    const el = map.getContainer();
-    if (!el) return;
+    const container = map.getContainer();
+    const parent = container?.parentElement;
 
     let raf = 0;
     const ro = new ResizeObserver(() => {
@@ -118,10 +123,19 @@ function FitToPath({
       });
     });
 
-    ro.observe(el);
+    if (container) ro.observe(container);
+    if (parent) ro.observe(parent);
+
+    const onWinResize = () => {
+      map.invalidateSize();
+      fitNow();
+    };
+    window.addEventListener("resize", onWinResize);
+
     return () => {
       cancelAnimationFrame(raf);
       ro.disconnect();
+      window.removeEventListener("resize", onWinResize);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [map]);
@@ -145,9 +159,7 @@ export default function DeliveryRouteMap({
 
   const [routePath, setRoutePath] = useState<[number, number][] | null>(null);
 
-  // ✅ Map instance-аа ref-ээр авна
-  const mapRef = useRef<L.Map | null>(null);
-
+  // route path авах (логик хэвээр)
   useEffect(() => {
     let cancelled = false;
 
@@ -155,11 +167,8 @@ export default function DeliveryRouteMap({
       setRoutePath(null);
       if (!hasPickup || !hasDropoff) return;
 
-      const p = pickup as LatLng;
-      const d = dropoff as LatLng;
-
       try {
-        const path = await fetchOsrmRoute(p, d);
+        const path = await fetchOsrmRoute(pickup as LatLng, dropoff as LatLng);
         if (!cancelled) setRoutePath(path);
       } catch {
         if (!cancelled) setRoutePath(null);
@@ -171,14 +180,6 @@ export default function DeliveryRouteMap({
       cancelled = true;
     };
   }, [hasPickup, hasDropoff, pickup, dropoff]);
-
-  // route ирсний дараа resize хийх
-  useEffect(() => {
-    const m = mapRef.current;
-    if (!m) return;
-    const t = setTimeout(() => m.invalidateSize(), 60);
-    return () => clearTimeout(t);
-  }, [routePath]);
 
   const center: [number, number] = useMemo(() => {
     if (hasPickup && hasDropoff) {
@@ -194,8 +195,15 @@ export default function DeliveryRouteMap({
 
   return (
     <div
-      className="w-full max-w-full overflow-hidden"
-      style={{ width: "100%", maxWidth: "100%", aspectRatio, display: "block" }}
+      className="w-full min-w-0 max-w-full overflow-hidden"
+      style={{
+        width: "100%",
+        maxWidth: "100%",
+        minWidth: 0,
+        aspectRatio,
+        display: "block",
+        minHeight: 280, // ✅ ЭНЭ Л НЭМСЭН: жижиг дэлгэц дээр хэт нам болчихоос хамгаална
+      }}
     >
       <MapContainer
         center={center}
@@ -203,13 +211,8 @@ export default function DeliveryRouteMap({
         scrollWheelZoom={false}
         minZoom={9}
         maxZoom={17}
-        style={{ height: "100%", width: "100%", maxWidth: "100%" }}
-        ref={mapRef as unknown as any}
-        whenReady={() => {
-          setTimeout(() => {
-            mapRef.current?.invalidateSize();
-          }, 0);
-        }}
+        // ✅ Хальж гарахаас хамгаална
+        style={{ height: "100%", width: "100%", maxWidth: "100%", minWidth: 0 }}
       >
         <TileLayer
           attribution="&copy; OpenStreetMap contributors &copy; CARTO"
@@ -217,7 +220,7 @@ export default function DeliveryRouteMap({
           crossOrigin="anonymous"
         />
 
-        <FitToPath pickup={pickup} dropoff={dropoff} path={routePath} paddingPx={paddingPx} />
+        <AutoFitAndResize pickup={pickup} dropoff={dropoff} path={routePath} paddingPx={paddingPx} />
 
         {routePath && routePath.length >= 2 && (
           <Polyline
