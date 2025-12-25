@@ -37,9 +37,7 @@ async function fetchOsrmRoute(pickup: LatLng, dropoff: LatLng) {
   if (!res.ok) return null;
 
   const data = await res.json();
-  const coords = data?.routes?.[0]?.geometry?.coordinates as
-    | [number, number][]
-    | undefined;
+  const coords = data?.routes?.[0]?.geometry?.coordinates as [number, number][] | undefined;
 
   if (!coords?.length) return null;
 
@@ -135,17 +133,19 @@ export default function DeliveryRouteMap({
   pickup,
   dropoff,
   aspectRatio = "4 / 3",
+  paddingPx = 100,
 }: {
   pickup: LatLng | null;
   dropoff: LatLng | null;
   aspectRatio?: string;
+  paddingPx?: number;
 }) {
   const hasPickup = isValid(pickup);
   const hasDropoff = isValid(dropoff);
 
   const [routePath, setRoutePath] = useState<[number, number][] | null>(null);
 
-  // ✅ Map instance-аа ref-ээр авна (танай type дээр хамгийн найдвартай)
+  // ✅ Map instance-аа ref-ээр авна
   const mapRef = useRef<L.Map | null>(null);
 
   useEffect(() => {
@@ -172,7 +172,7 @@ export default function DeliveryRouteMap({
     };
   }, [hasPickup, hasDropoff, pickup, dropoff]);
 
-  // route ирсний дараа resize хийх (preview scale-д хэрэгтэй)
+  // route ирсний дараа resize хийх
   useEffect(() => {
     const m = mapRef.current;
     if (!m) return;
@@ -193,19 +193,19 @@ export default function DeliveryRouteMap({
   }, [hasPickup, hasDropoff, pickup, dropoff]);
 
   return (
-    <div style={{ width: "100%", aspectRatio }}>
+    <div
+      className="w-full max-w-full overflow-hidden"
+      style={{ width: "100%", maxWidth: "100%", aspectRatio, display: "block" }}
+    >
       <MapContainer
         center={center}
         zoom={12}
         scrollWheelZoom={false}
         minZoom={9}
         maxZoom={17}
-        style={{ height: "100%", width: "100%" }}
-        // ✅ танай хувилбар дээр ref нь зөв ажиллана (TS-г cast хийж намжаана)
+        style={{ height: "100%", width: "100%", maxWidth: "100%" }}
         ref={mapRef as unknown as any}
-        // ✅ whenReady нь аргументгүй байх ёстой (танай error үүнээс болсон)
         whenReady={() => {
-          // mount дээр нэг удаа resize
           setTimeout(() => {
             mapRef.current?.invalidateSize();
           }, 0);
@@ -217,7 +217,7 @@ export default function DeliveryRouteMap({
           crossOrigin="anonymous"
         />
 
-        <FitToPath pickup={pickup} dropoff={dropoff} path={routePath} paddingPx={100} />
+        <FitToPath pickup={pickup} dropoff={dropoff} path={routePath} paddingPx={paddingPx} />
 
         {routePath && routePath.length >= 2 && (
           <Polyline
@@ -233,10 +233,7 @@ export default function DeliveryRouteMap({
         )}
 
         {hasPickup && (
-          <Marker
-            position={[(pickup as LatLng).lat, (pickup as LatLng).lng]}
-            icon={emojiIcon("📦")}
-          >
+          <Marker position={[(pickup as LatLng).lat, (pickup as LatLng).lng]} icon={emojiIcon("📦")}>
             <Tooltip direction="top" offset={[0, -18]} opacity={1}>
               Авах
             </Tooltip>
@@ -244,10 +241,7 @@ export default function DeliveryRouteMap({
         )}
 
         {hasDropoff && (
-          <Marker
-            position={[(dropoff as LatLng).lat, (dropoff as LatLng).lng]}
-            icon={emojiIcon("👋")}
-          >
+          <Marker position={[(dropoff as LatLng).lat, (dropoff as LatLng).lng]} icon={emojiIcon("👋")}>
             <Tooltip direction="top" offset={[0, -18]} opacity={1}>
               Хүргэх
             </Tooltip>
