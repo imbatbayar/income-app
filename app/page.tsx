@@ -1,182 +1,141 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { supabase } from "@/lib/supabase";
+import { createClient } from "@supabase/supabase-js";
+
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL || "",
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ""
+);
+
+const digitsOnly = (v: string) => v.replace(/\D/g, "");
+const clamp = (v: string, n: number) => v.slice(0, n);
 
 export default function LoginPage() {
   const router = useRouter();
 
-  const [identifier, setIdentifier] = useState(""); // имэйл эсвэл утас
-  const [password, setPassword] = useState(""); // 4 оронтой PIN
-  const [showPassword, setShowPassword] = useState(false);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [error, setError] = useState("");
+  const [phone, setPhone] = useState("");
+  const [pin, setPin] = useState("");
+  const [err, setErr] = useState("");
+  const [loading, setLoading] = useState(false);
 
-  async function handleSubmit(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    setError("");
+  const onLogin = async () => {
+    setErr("");
 
-    if (!identifier.trim() || !password.trim()) {
-      setError("Имэйл/утас болон нууц үгээ бөглөнө үү.");
-      return;
-    }
+    const pRaw = phone;
+    const pinRaw = pin;
 
-    setIsSubmitting(true);
+    const p = clamp(digitsOnly(pRaw), 8);
+    const s = clamp(digitsOnly(pinRaw), 4);
 
-    const { data, error: selectError } = await supabase
+    if (/[^0-9]/.test(pRaw)) return setErr("Утас зөвхөн тоо байна.");
+    if (/[^0-9]/.test(pinRaw)) return setErr("PIN зөвхөн тоо байна.");
+    if (p.length !== 8) return setErr("Утасны дугаар 8 оронтой тоо байна.");
+    if (s.length !== 4) return setErr("PIN 4 оронтой тоо байна.");
+
+    setLoading(true);
+
+    const { data: user, error } = await supabase
       .from("users")
-      .select("*")
-      .or(`email.eq.${identifier},phone.eq.${identifier}`)
+      .select("id, role, name, full_name, phone, pin")
+      .eq("phone", p)
       .maybeSingle();
 
-    if (selectError) {
-      console.error(selectError);
-      setIsSubmitting(false);
-      setError("Серверийн алдаа гарлаа. Дахин оролдоно уу.");
-      return;
-    }
+    setLoading(false);
 
-    if (!data) {
-      setIsSubmitting(false);
-      setError("Ийм хэрэглэгч бүртгэлгүй байна.");
-      return;
-    }
+    if (error) return setErr(error.message);
+    if (!user) return setErr("Бүртгэл олдсонгүй. Эхлээд бүртгүүлнэ үү.");
 
-    if (data.pin !== password) {
-      setIsSubmitting(false);
-      setError("Нууц үг буруу байна.");
-      return;
-    }
+    // ✅ PIN шалгалт (одоо байгаа логиктой нийцүүлэхийн тулд plain pin ашиглав)
+    if (String(user.pin || "") !== s) return setErr("PIN буруу байна.");
 
-    // ✅ Амжилттай нэвтэрвэл localStorage-д хадгалаад role-оор нь чиглүүлнэ
-    const user = {
-      id: data.id,
-      role: data.role,
-      name: data.name,
-      phone: data.phone,
-      email: data.email,
-    };
+    const displayName = user.full_name || user.name || p;
 
-    if (typeof window !== "undefined") {
-      localStorage.setItem("incomeUser", JSON.stringify(user));
-    }
+    localStorage.setItem(
+      "incomeUser",
+      JSON.stringify({ id: user.id, role: user.role, name: displayName, phone: p })
+    );
 
-    setIsSubmitting(false);
-
-    if (data.role === "seller") {
-      router.push("/seller");
-    } else {
-      router.push("/driver");
-    }
-  }
+    router.push(user.role === "driver" ? "/driver" : "/seller");
+  };
 
   return (
     <div className="min-h-screen bg-slate-50 flex items-center justify-center px-4">
-      <div className="w-full max-w-md">
-        {/* Top logo / title */}
-        <div className="mb-8 text-center">
-          <div className="inline-flex items-center justify-center rounded-full bg-emerald-50 px-4 py-2 mb-3">
-            <span className="text-sm font-semibold text-emerald-700">
-              INCOME
-            </span>
+      <div className="w-full max-w-[460px]">
+        {/* Logo төвд */}
+        <div className="text-center mb-6">
+          <img
+            src="/tahi.png"
+            alt="TAHI"
+            className="mx-auto h-20 w-20 rounded-2xl border border-slate-200 bg-white object-contain"
+          />
+          <div className="mt-4 text-2xl font-black text-slate-900">
+            Tahi 
           </div>
-          <h1 className="text-2xl font-semibold text-slate-900">
-            Хүргэлтийн marketplace
-          </h1>
-          <p className="mt-2 text-sm text-slate-500">
-            Утас эсвэл имэйлээрээ нэвтэрч, хүргэлтийн системээ ашигла.
-          </p>
+          <div className="mt-1 text-sm text-slate-600">
+            Smart Delivery System
+          </div>
         </div>
 
-        {/* Card */}
-        <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6">
-          <h2 className="text-lg font-semibold text-slate-900 mb-1">
-            Нэвтрэх
-          </h2>
-          <p className="text-sm text-slate-500 mb-6">
-            Өмнө бүртгүүлсэн имэйл эсвэл утасны дугаараар нэвтэрнэ.
-          </p>
+        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+          <div className="text-lg font-extrabold text-slate-900">Нэвтрэх</div>
 
-          <form onSubmit={handleSubmit} className="space-y-4">
-            {/* Email / Phone */}
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">
-                Имэйл эсвэл утасны дугаар
-              </label>
+          <div className="mt-4">
+            <label className="text-sm font-semibold text-slate-700">
+              Утасны дугаар 
+            </label>
+            <div className="mt-2 flex items-center gap-2">
+              <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-bold text-slate-700">
+                +976
+              </div>
               <input
-                type="text"
-                className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 bg-slate-50"
-                placeholder="example@mail.com эсвэл 88xxxxxx"
-                value={identifier}
-                onChange={(e) => setIdentifier(e.target.value)}
+                value={phone}
+                onChange={(e) => setPhone(clamp(e.target.value, 8))}
+                inputMode="numeric"
+                maxLength={8}
+                placeholder="88xxxxxx"
+                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-emerald-500"
               />
             </div>
-
-            {/* Password */}
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">
-                Нууц үг (4 оронтой PIN)
-              </label>
-              <div className="relative">
-                <input
-                  type={showPassword ? "text" : "password"}
-                  className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 bg-slate-50 pr-10 tracking-[0.3em]"
-                  placeholder="••••"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                />
-                <button
-                  type="button"
-                  className="absolute inset-y-0 right-0 px-3 text-xs text-slate-500 hover:text-slate-700"
-                  onClick={() => setShowPassword((v) => !v)}
-                >
-                  {showPassword ? "Нуух" : "Харах"}
-                </button>
-              </div>
-            </div>
-
-            {/* Error */}
-            {error && (
-              <div className="rounded-xl bg-red-50 text-red-700 text-sm px-3 py-2">
-                {error}
-              </div>
-            )}
-
-            {/* Submit */}
-            <button
-              type="submit"
-              disabled={isSubmitting}
-              className="w-full inline-flex items-center justify-center rounded-xl bg-emerald-600 text-white text-sm font-semibold py-2.5 mt-2 disabled:opacity-60 disabled:cursor-not-allowed hover:bg-emerald-700 transition-colors"
-            >
-              {isSubmitting ? "Нэвтрэж байна..." : "Нэвтрэх"}
-            </button>
-          </form>
-
-          {/* Divider */}
-          <div className="flex items-center mt-6 mb-4">
-            <div className="flex-1 h-px bg-slate-200" />
-            <span className="mx-3 text-xs text-slate-400">эсвэл</span>
-            <div className="flex-1 h-px bg-slate-200" />
           </div>
 
-          {/* Register link */}
-          <p className="text-sm text-slate-600 text-center">
+          <div className="mt-4">
+            <label className="text-sm font-semibold text-slate-700">
+              Нууц үг (4 оронтой PIN)
+            </label>
+            <input
+              value={pin}
+              onChange={(e) => setPin(clamp(e.target.value, 4))}
+              inputMode="numeric"
+              maxLength={4}
+              placeholder="••••"
+              className="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-emerald-500"
+            />
+          </div>
+
+          {err && <div className="mt-3 text-sm font-semibold text-red-600">{err}</div>}
+
+          <button
+            onClick={onLogin}
+            disabled={loading}
+            className="mt-5 w-full rounded-xl bg-emerald-600 py-3 text-sm font-extrabold text-white hover:bg-emerald-700 disabled:opacity-60"
+          >
+            {loading ? "Шалгаж байна…" : "Нэвтрэх"}
+          </button>
+
+          <div className="mt-4 text-center text-sm text-slate-600">
             Шинэ хэрэглэгч үү?{" "}
-            <Link
-              href="/register"
-              className="font-semibold text-emerald-600 hover:text-emerald-700"
-            >
-              Бүртгэл үүсгэх
+            <Link className="font-extrabold text-emerald-700" href="/register">
+              Бүртгүүлэх
             </Link>
-          </p>
+          </div>
         </div>
 
-        {/* Footer */}
-        <p className="mt-6 text-xs text-slate-400 text-center">
-          INCOME v1.0 · BABA &amp; Hypatia · 2025
-        </p>
+        <div className="mt-6 text-center text-xs text-slate-500">
+          © {new Date().getFullYear()} Hypatia Systems. All rights reserved.
+        </div>
       </div>
     </div>
   );

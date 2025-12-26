@@ -31,7 +31,7 @@ export default function RootLayout({
     <html lang="mn">
       <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
         <TahiHeader />
-        <div className="pt-16">{children}</div>
+        <div style={{ paddingTop: "var(--tahi-header-h, 0px)" }}>{children}</div>
       </body>
     </html>
   );

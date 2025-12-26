@@ -743,7 +743,7 @@ export default function SellerDashboardPage() {
                   onClick={() => router.push("/seller/new-delivery")}
                   className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700"
                 >
-                  Шинэ хүргэлт
+                  + Шинэ хүргэлт
                 </button>
 
                 {/* ❌ “Гарах” харагдуулахгүй (логик нь хэвээр) */}

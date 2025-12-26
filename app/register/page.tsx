@@ -1,312 +1,447 @@
 "use client";
 
-import { FormEvent, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useState } from "react";
 import Link from "next/link";
-import { supabase } from "@/lib/supabase";
+import { useRouter } from "next/navigation";
+import { createClient } from "@supabase/supabase-js";
 
-type Role = "seller" | "driver";
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL || "",
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ""
+);
+
+const digitsOnly = (v: string) => v.replace(/\D/g, "");
+const clamp = (v: string, n: number) => v.slice(0, n);
+
+// ✅ 4 тоо (машины дугаарын тоон хэсэг)
+const onlyDigitsN = (v: string, n: number) => v.replace(/\D/g, "").slice(0, n);
+
+// ✅ 3 кирилл (Монгол үсэг) — латин/тоо оруулахгүй
+const onlyCyrillicN = (v: string, n: number) =>
+  v.replace(/[^А-ЯЁӨҮа-яёөү]/g, "").slice(0, n);
+
+type Role = "driver" | "seller";
+
+// ✅ SMS provider байхгүй үед DEV тест хийх (localhost / *.vercel.app дээр л зөвшөөрнө)
+function allowDevOtp() {
+  if (typeof window === "undefined") return false;
+  const host = window.location.hostname || "";
+  return host === "localhost" || host.endsWith(".vercel.app");
+}
 
 export default function RegisterPage() {
   const router = useRouter();
 
   const [role, setRole] = useState<Role>("seller");
-  const [name, setName] = useState("");
+
   const [phone, setPhone] = useState("");
-  const [email, setEmail] = useState("");
+  const [otp, setOtp] = useState("");
+
   const [pin, setPin] = useState("");
-  const [pin2, setPin2] = useState("");
-  const [showPin, setShowPin] = useState(false);
-  const [agree, setAgree] = useState(false);
+  const [fullName, setFullName] = useState("");
 
-  const [error, setError] = useState("");
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [storeName, setStoreName] = useState(""); // seller optional
 
-  const roleLabel = role === "seller" ? "Худалдагч" : "Жолооч";
+  // ✅ driver: 4 тоо + 3 кирилл тусдаа
+  const [carNum, setCarNum] = useState(""); // 4 digits
+  const [carSer, setCarSer] = useState(""); // 3 cyrillic letters
 
-  async function handleSubmit(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    setError("");
+  const [step, setStep] = useState<"PHONE" | "OTP" | "SETUP">("PHONE");
+  const [err, setErr] = useState("");
+  const [loading, setLoading] = useState(false);
 
-    // --- Фронт талын шалгалт ---
-    if (!name.trim()) {
-      setError("Нэрээ бөглөнө үү.");
-      return;
-    }
-    if (!phone.trim()) {
-      setError("Утасны дугаараа бөглөнө үү.");
-      return;
-    }
-    if (!email.trim()) {
-      setError("Имэйл хаягаа бөглөнө үү.");
-      return;
-    }
-    if (!email.includes("@") || !email.includes(".")) {
-      setError("Имэйл хаягаа зөв форматтай оруулна уу.");
-      return;
-    }
-    if (!/^\d{4}$/.test(pin)) {
-      setError("Нууц үг 4 оронтой тоо байх ёстой.");
-      return;
-    }
-    if (pin !== pin2) {
-      setError("Нууц үг хоёр таарахгүй байна.");
-      return;
-    }
-    if (!agree) {
-      setError("Ашиглах нөхцөлтэй танилцаж зөвшөөрөх шаардлагатай.");
-      return;
+  // ✅ DEV OTP үед auth user байхгүй тул uid-г энд хадгална
+  const [devUid, setDevUid] = useState<string>("");
+
+  const sendOtp = async () => {
+    setErr("");
+
+    const pRaw = phone;
+    const p = clamp(digitsOnly(pRaw), 8);
+
+    if (/[^0-9]/.test(pRaw)) return setErr("Утас зөвхөн тоо байна.");
+    if (p.length !== 8) return setErr("Утасны дугаар 8 оронтой тоо байна.");
+
+    setLoading(true);
+    const { error } = await supabase.auth.signInWithOtp({ phone: `+976${p}` });
+    setLoading(false);
+
+    // ✅ Provider байхгүй үед DEV горим (123456) руу оруулна
+    if (error) {
+      if (allowDevOtp()) {
+        setStep("OTP");
+        setErr("DEV тест: SMS байхгүй. Код дээр 123456 гэж бичээд үргэлжлүүл.");
+        return;
+      }
+      return setErr(error.message);
     }
 
-    setIsSubmitting(true);
+    setStep("OTP");
+  };
 
-    // --- Утас / имэйл давтагдаж байгаа эсэхийг шалгана ---
-    const { data: existing, error: existsError } = await supabase
-      .from("users")
-      .select("id")
-      .or(`phone.eq.${phone},email.eq.${email}`)
-      .maybeSingle();
+  const verifyOtp = async () => {
+    setErr("");
 
-    if (existsError) {
-      console.error(existsError);
-      setIsSubmitting(false);
-      setError("Серверийн алдаа гарлаа. Дараа дахин оролдоно уу.");
+    const p = clamp(digitsOnly(phone), 8);
+    const codeRaw = otp;
+    const code = clamp(digitsOnly(codeRaw), 6);
+
+    if (p.length !== 8) return setErr("Утасны дугаар 8 оронтой тоо байна.");
+    if (/[^0-9]/.test(codeRaw)) return setErr("Код зөвхөн тоо байна.");
+    if (code.length < 4) return setErr("SMS кодоо оруулна уу.");
+
+    // ✅ DEV shortcut: 123456
+    if (allowDevOtp() && code === "123456") {
+      // auth session байхгүй тул түр uid үүсгээд SETUP руу орно
+      const uid =
+        typeof crypto !== "undefined" && "randomUUID" in crypto
+          ? crypto.randomUUID()
+          : `dev_${Date.now()}_${p}`;
+
+      setDevUid(uid);
+      setStep("SETUP");
       return;
     }
 
-    if (existing) {
-      setIsSubmitting(false);
-      setError("Энэ утас эсвэл имэйлээр аль хэдийн бүртгүүлсэн байна.");
-      return;
-    }
-
-    // --- Жинхэнэ insert ---
-    const { error: insertError } = await supabase.from("users").insert({
-      role,
-      name,
-      phone,
-      email,
-      pin, // v2 дээр PIN-г hash хийнэ
+    setLoading(true);
+    const { data, error } = await supabase.auth.verifyOtp({
+      phone: `+976${p}`,
+      token: code,
+      type: "sms",
     });
+    setLoading(false);
 
-    if (insertError) {
-      console.error(insertError);
-      setIsSubmitting(false);
-      setError("Бүртгэл үүсгэхэд алдаа гарлаа.");
-      return;
+    if (error) return setErr(error.message);
+    if (!data?.user?.id) return setErr("Баталгаажсан хэрэглэгч олдсонгүй.");
+
+    setStep("SETUP");
+  };
+
+  const createAccount = async () => {
+    setErr("");
+
+    const pRaw = phone;
+    const p = clamp(digitsOnly(pRaw), 8);
+
+    const pinRaw = pin;
+    const s = clamp(digitsOnly(pinRaw), 4);
+
+    if (/[^0-9]/.test(pRaw)) return setErr("Утас зөвхөн тоо байна.");
+    if (p.length !== 8) return setErr("Утасны дугаар 8 оронтой тоо байна.");
+
+    if (/[^0-9]/.test(pinRaw)) return setErr("PIN зөвхөн тоо байна.");
+    if (s.length !== 4) return setErr("PIN 4 оронтой тоо байна.");
+
+    if (!String(fullName || "").trim()) return setErr("Овог нэр заавал.");
+
+    // ✅ driver дугаар шалгалт: 4 тоо + 3 кирилл
+    if (role === "driver") {
+      if (carNum.length !== 4) return setErr("Машины дугаарын 4 тоог бүрэн оруул.");
+      if (carSer.length !== 3) return setErr("Серийн 3 кирилл үсгийг бүрэн оруул.");
     }
 
-    // Амжилттай → Login руу
-    setIsSubmitting(false);
-    router.push("/");
-  }
+    // ✅ uid-г шийднэ: жинхэнэ auth uid эсвэл devUid
+    let uid = "";
+
+    // DEV OTP бол devUid ашиглана
+    if (devUid) {
+      uid = devUid;
+    } else {
+      const { data: sess } = await supabase.auth.getUser();
+      uid = sess?.user?.id || "";
+    }
+
+    if (!uid) {
+      return setErr("SMS баталгаажуулалт дуусаагүй байна.");
+    }
+
+    setLoading(true);
+
+    const carPlate =
+      role === "driver" ? `${carNum}${carSer.toUpperCase()}` : null;
+
+    // ✅ users хүснэгтэд бүртгэл үүсгэнэ
+    // NOTE: users table дээр id/role/phone/pin/name/full_name/stars/store_name/car_plate байх ёстой.
+    const payload: any = {
+      id: uid,
+      role,
+      phone: p,
+      pin: s,
+      full_name: String(fullName).trim(),
+      name: String(fullName).trim(),
+      store_name: String(storeName || "").trim() || null,
+      car_plate: carPlate,
+      stars: 0,
+    };
+
+    const { error } = await supabase.from("users").upsert(payload);
+    setLoading(false);
+
+    if (error) return setErr(error.message);
+
+    // ✅ LocalStorage auth (хуучин логик эвдэхгүй)
+    localStorage.setItem(
+      "incomeUser",
+      JSON.stringify({
+        id: uid,
+        role,
+        name: String(fullName).trim(),
+        phone: p,
+      })
+    );
+
+    // ✅ Supabase auth session-ийг үлдээхгүй (дараа нь PIN login л ашиглана)
+    try {
+      await supabase.auth.signOut();
+    } catch {}
+
+    router.push(role === "driver" ? "/driver" : "/seller");
+  };
 
   return (
     <div className="min-h-screen bg-slate-50 flex items-center justify-center px-4">
-      <div className="w-full max-w-md">
-        {/* Top logo / title */}
-        <div className="mb-8 text-center">
-          <div className="inline-flex items-center justify-center rounded-full bg-emerald-50 px-4 py-2 mb-3">
-            <span className="text-sm font-semibold text-emerald-700">
-              INCOME
-            </span>
+      <div className="w-full max-w-[520px]">
+        <div className="text-center mb-6">
+          <img
+            src="/tahi.png"
+            alt="TAHI"
+            className="mx-auto h-20 w-20 rounded-2xl border border-slate-200 bg-white object-contain"
+          />
+          <div className="mt-4 text-2xl font-black text-slate-900">
+            Tahi - Smart Delivery System
           </div>
-          <h1 className="text-2xl font-semibold text-slate-900">
-            Бүртгэл үүсгэх
-          </h1>
-          <p className="mt-2 text-sm text-slate-500">
-            Жолооч эсвэл Худалдагч хэлбэрээр нэг удаа бүртгүүлж ашиглана.
-          </p>
+          <div className="mt-1 text-sm text-slate-600">
+            Бүртгүүлэх: 1 удаа SMS → 4 оронтой PIN үүсгэнэ
+          </div>
         </div>
 
-        {/* Card */}
-        <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6">
-          {/* Role toggle */}
-          <div className="flex mb-6 rounded-xl bg-slate-50 p-1">
-            <button
-              type="button"
-              onClick={() => setRole("seller")}
-              className={`flex-1 text-sm font-medium py-2 rounded-lg transition ${
-                role === "seller"
-                  ? "bg-white shadow-sm text-emerald-700"
-                  : "text-slate-500"
-              }`}
-            >
-              Худалдагч
-            </button>
-            <button
-              type="button"
-              onClick={() => setRole("driver")}
-              className={`flex-1 text-sm font-medium py-2 rounded-lg transition ${
-                role === "driver"
-                  ? "bg-white shadow-sm text-emerald-700"
-                  : "text-slate-500"
-              }`}
-            >
-              Жолооч
-            </button>
+        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+          <div className="text-lg font-extrabold text-slate-900">
+            Бүртгэл үүсгэх
           </div>
 
-          <form onSubmit={handleSubmit} className="space-y-4">
-            {/* Name */}
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">
-                Нэр
-              </label>
-              <input
-                type="text"
-                className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 bg-slate-50"
-                placeholder="Жишээ: Батбаяр"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-              />
+          {/* Role */}
+          <div className="mt-4">
+            <div className="text-sm font-semibold text-slate-700 mb-2">
+              Төрөл сонгох
             </div>
-
-            {/* Phone */}
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">
-                Утасны дугаар
-              </label>
-              <input
-                type="tel"
-                className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 bg-slate-50"
-                placeholder="Жишээ: 88112233"
-                value={phone}
-                onChange={(e) => setPhone(e.target.value)}
-              />
-              <p className="mt-1 text-xs text-slate-400">
-                Нэг утасны дугаараар зөвхөн нэг л удаа бүртгүүлнэ.
-              </p>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                onClick={() => setRole("seller")}
+                className={`rounded-xl border px-3 py-3 text-sm font-extrabold ${
+                  role === "seller"
+                    ? "border-emerald-600 bg-emerald-50 text-emerald-800"
+                    : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                }`}
+              >
+                Худалдагч
+              </button>
+              <button
+                onClick={() => setRole("driver")}
+                className={`rounded-xl border px-3 py-3 text-sm font-extrabold ${
+                  role === "driver"
+                    ? "border-emerald-600 bg-emerald-50 text-emerald-800"
+                    : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                }`}
+              >
+                Жолооч
+              </button>
             </div>
+          </div>
 
-            {/* Email */}
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">
-                Имэйл хаяг
-              </label>
-              <input
-                type="email"
-                className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 bg-slate-50"
-                placeholder="example@mail.com"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-              />
-              <p className="mt-1 text-xs text-slate-400">
-                Имэйлээр нууц үг сэргээх, баталгаажуулах мэдээлэл очно.
-              </p>
-            </div>
+          {/* Step PHONE */}
+          {step === "PHONE" && (
+            <>
+              <div className="mt-4">
+                <label className="text-sm font-semibold text-slate-700">
+                  Утасны дугаар
+                </label>
+                <div className="mt-2 flex items-center gap-2">
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-bold text-slate-700">
+                    +976
+                  </div>
+                  <input
+                    value={phone}
+                    onChange={(e) => setPhone(clamp(e.target.value, 8))}
+                    inputMode="numeric"
+                    maxLength={8}
+                    placeholder="88xxxxxx"
+                    className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-emerald-500"
+                  />
+                </div>
+              </div>
 
-            {/* PIN */}
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">
-                Нууц үг (4 оронтой PIN)
-              </label>
-              <div className="relative">
+              {err && (
+                <div className="mt-3 text-sm font-semibold text-red-600">
+                  {err}
+                </div>
+              )}
+
+              <button
+                onClick={sendOtp}
+                disabled={loading}
+                className="mt-5 w-full rounded-xl bg-emerald-600 py-3 text-sm font-extrabold text-white hover:bg-emerald-700 disabled:opacity-60"
+              >
+                {loading ? "Илгээж байна…" : "SMS код авах"}
+              </button>
+            </>
+          )}
+
+          {/* Step OTP */}
+          {step === "OTP" && (
+            <>
+              <div className="mt-4 text-sm text-slate-600">
+                +976{" "}
+                <span className="font-extrabold text-slate-900">
+                  {clamp(digitsOnly(phone), 8)}
+                </span>{" "}
+                дугаарт илгээгдсэн код.
+              </div>
+
+              <div className="mt-4">
+                <label className="text-sm font-semibold text-slate-700">
+                  SMS код (6 оронтой)
+                </label>
                 <input
-                  type={showPin ? "text" : "password"}
+                  value={otp}
+                  onChange={(e) => setOtp(clamp(e.target.value, 6))}
+                  inputMode="numeric"
+                  maxLength={6}
+                  placeholder="123456"
+                  className="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-emerald-500"
+                />
+              </div>
+
+              {err && (
+                <div className="mt-3 text-sm font-semibold text-red-600">
+                  {err}
+                </div>
+              )}
+
+              <button
+                onClick={verifyOtp}
+                disabled={loading}
+                className="mt-5 w-full rounded-xl bg-emerald-600 py-3 text-sm font-extrabold text-white hover:bg-emerald-700 disabled:opacity-60"
+              >
+                {loading ? "Шалгаж байна…" : "Баталгаажуулах"}
+              </button>
+
+              <button
+                onClick={() => {
+                  setErr("");
+                  setOtp("");
+                  setStep("PHONE");
+                }}
+                className="mt-3 w-full rounded-xl border border-slate-200 py-3 text-sm font-extrabold text-slate-700 hover:bg-slate-50"
+              >
+                Буцах
+              </button>
+            </>
+          )}
+
+          {/* Step SETUP */}
+          {step === "SETUP" && (
+            <>
+              <div className="mt-4">
+                <label className="text-sm font-semibold text-slate-700">
+                  Нэр ( заавал бөглөнө )
+                </label>
+                <input
+                  value={fullName}
+                  onChange={(e) => setFullName(e.target.value)}
+                  placeholder="Жишээ: Батбаяр"
+                  className="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-emerald-500"
+                />
+              </div>
+
+              {role === "seller" && (
+                <div className="mt-4">
+                  <label className="text-sm font-semibold text-slate-700">
+                    Дэлгүүрийн нэр 
+                  </label>
+                  <input
+                    value={storeName}
+                    onChange={(e) => setStoreName(e.target.value)}
+                    placeholder="Заавал биш"
+                    className="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-emerald-500"
+                  />
+                </div>
+              )}
+
+              {role === "driver" && (
+                <div className="mt-4">
+                  <label className="text-sm font-semibold text-slate-700">
+                    Машины дугаар
+                  </label>
+
+                  <div className="mt-2 flex gap-2">
+                    <input
+                      value={carNum}
+                      onChange={(e) => setCarNum(onlyDigitsN(e.target.value, 4))}
+                      inputMode="numeric"
+                      maxLength={4}
+                      placeholder="1234"
+                      className="w-[120px] rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-emerald-500"
+                    />
+
+                    <input
+                      value={carSer}
+                      onChange={(e) =>
+                        setCarSer(onlyCyrillicN(e.target.value, 3))
+                      }
+                      maxLength={3}
+                      placeholder="АБВ"
+                      className="w-[120px] rounded-xl border border-slate-200 px-3 py-2 text-sm uppercase outline-none focus:border-emerald-500"
+                    />
+                  </div>
+
+                  <div className="mt-1 text-xs text-slate-500">
+                    Машины сер дээр латин үсэг орохгүй.
+                  </div>
+                </div>
+              )}
+
+              <div className="mt-4">
+                <label className="text-sm font-semibold text-slate-700">
+                  4 оронтой PIN үүсгэх
+                </label>
+                <input
+                  value={pin}
+                  onChange={(e) => setPin(clamp(e.target.value, 4))}
                   inputMode="numeric"
                   maxLength={4}
-                  className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 bg-slate-50 pr-10 tracking-[0.3em]"
                   placeholder="••••"
-                  value={pin}
-                  onChange={(e) => {
-                    const v = e.target.value.replace(/\D/g, "");
-                    setPin(v);
-                  }}
+                  className="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-emerald-500"
                 />
-                <button
-                  type="button"
-                  className="absolute inset-y-0 right-0 px-3 text-xs text-slate-500 hover:text-slate-700"
-                  onClick={() => setShowPin((v) => !v)}
-                >
-                  {showPin ? "Нуух" : "Харах"}
-                </button>
               </div>
-              <p className="mt-1 text-xs text-slate-400">
-                Зөвхөн 4 оронтой тоо байхаар тохируулна (жишээ: 1234).
-              </p>
-            </div>
 
-            {/* PIN confirm */}
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">
-                Нууц үг давтах
-              </label>
-              <input
-                type={showPin ? "text" : "password"}
-                inputMode="numeric"
-                maxLength={4}
-                className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 bg-slate-50 tracking-[0.3em]"
-                placeholder="••••"
-                value={pin2}
-                onChange={(e) => {
-                  const v = e.target.value.replace(/\D/g, "");
-                  setPin2(v);
-                }}
-              />
-            </div>
+              {err && (
+                <div className="mt-3 text-sm font-semibold text-red-600">
+                  {err}
+                </div>
+              )}
 
-            {/* Terms */}
-            <div className="flex items-start gap-2 pt-1">
-              <input
-                id="agree"
-                type="checkbox"
-                checked={agree}
-                onChange={(e) => setAgree(e.target.checked)}
-                className="mt-1 h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
-              />
-              <label
-                htmlFor="agree"
-                className="text-xs text-slate-600 leading-relaxed"
+              <button
+                onClick={createAccount}
+                disabled={loading}
+                className="mt-5 w-full rounded-xl bg-emerald-600 py-3 text-sm font-extrabold text-white hover:bg-emerald-700 disabled:opacity-60"
               >
-                Би INCOME хүргэлтийн marketplace-ийн ашиглах нөхцөл, хувийн
-                мэдээлэл ашиглах журмыг уншиж танилцсан бөгөөд{" "}
-                <span className="font-semibold">зөвшөөрч байна.</span>
-              </label>
-            </div>
+                {loading ? "Бүртгэж байна…" : "Бүртгэл үүсгэх"}
+              </button>
+            </>
+          )}
 
-            {/* Error */}
-            {error && (
-              <div className="rounded-xl bg-red-50 text-red-700 text-sm px-3 py-2">
-                {error}
-              </div>
-            )}
-
-            {/* Submit */}
-            <button
-              type="submit"
-              disabled={isSubmitting}
-              className="w-full inline-flex items-center justify-center rounded-xl bg-emerald-600 text-white text-sm font-semibold py-2.5 mt-2 disabled:opacity-60 disabled:cursor-not-allowed hover:bg-emerald-700 transition-colors"
-            >
-              {isSubmitting
-                ? "Бүртгэл үүсгэж байна..."
-                : `${roleLabel} бүртгэл үүсгэх`}
-            </button>
-          </form>
-
-          {/* Divider */}
-          <div className="flex items-center mt-6 mb-4">
-            <div className="flex-1 h-px bg-slate-200" />
-            <span className="mx-3 text-xs text-slate-400">эсвэл</span>
-            <div className="flex-1 h-px bg-slate-200" />
-          </div>
-
-          {/* Back to login */}
-          <p className="text-sm text-slate-600 text-center">
+          <div className="mt-4 text-center text-sm text-slate-600">
             Аль хэдийн бүртгэлтэй юу?{" "}
-            <Link
-              href="/"
-              className="font-semibold text-emerald-600 hover:text-emerald-700"
-            >
+            <Link className="font-extrabold text-emerald-700" href="/">
               Нэвтрэх
             </Link>
-          </p>
+          </div>
         </div>
 
-        {/* Footer */}
-        <p className="mt-6 text-xs text-slate-400 text-center">
-          INCOME v1.0 · {roleLabel} бүртгэл · Монгол
-        </p>
+        <div className="mt-6 text-center text-xs text-slate-500">
+          © {new Date().getFullYear()} Hypatia Systems. All rights reserved.
+        </div>
       </div>
     </div>
   );
