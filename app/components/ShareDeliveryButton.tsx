@@ -130,7 +130,7 @@ export default function ShareDeliveryButton({
       </button>
 
       {open && (
-        <div className="fixed inset-0 z-[9999]">
+        <div className="fixed inset-0 z-9999">
           {/* overlay */}
           <div
             className="absolute inset-0 bg-black/50 z-0"

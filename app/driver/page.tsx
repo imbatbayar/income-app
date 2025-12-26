@@ -291,13 +291,6 @@ function DriverPageInner() {
     }
   }, [router]);
 
-  function logout() {
-    try {
-      window.localStorage.removeItem("incomeUser");
-    } catch {}
-    router.replace("/");
-  }
-
   // ---------------- tab init ----------------
   useEffect(() => {
     const q = sp.get("tab");
@@ -716,34 +709,7 @@ function DriverPageInner() {
   return (
     <div className="min-h-screen bg-slate-50">
       <div className="mx-auto max-w-5xl px-4 py-6">
-        {/* header */}
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <div className="text-sm text-slate-500">INCOME</div>
-            <h1 className="text-xl font-bold text-slate-900">Жолооч</h1>
-            <div className="mt-1 text-xs text-slate-500">
-              {user.name} · {user.phone}
-            </div>
-          </div>
-
-          {/* ✅ Right edge actions */}
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => router.push("/driver/profile")}
-              className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-900 hover:border-slate-300"
-            >
-              Профайл
-            </button>
-
-            <button
-              onClick={logout}
-              className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:border-slate-300"
-            >
-              Гарах
-            </button>
-          </div>
-        </div>
-
+        
         {/* tabs (seller-like summary cards) */}
         <div className="mt-5 grid grid-cols-2 sm:grid-cols-4 gap-2">
           {DRIVER_TABS.map((t) => {
@@ -936,7 +902,7 @@ function DriverPageInner() {
 
       {/* 🔍 Search Modal (Poster popup style) */}
       {searchOpen && (
-        <div className="fixed inset-0 z-[9999]">
+        <div className="fixed inset-0 z-9999">
           <div className="absolute inset-0 bg-black/50 z-0" onClick={() => setSearchOpen(false)} aria-hidden="true" />
 
           <div className="absolute inset-0 z-10 flex items-center justify-center p-4 sm:p-6">

@@ -62,7 +62,7 @@ export default function HamburgerMenu({ items }: { items: MenuItem[] }) {
       </button>
 
       {open ? (
-        <div className="fixed inset-0 z-[60]">
+        <div className="fixed inset-0 z-60">
           <div className="absolute inset-0 bg-black/30" />
 
           <div

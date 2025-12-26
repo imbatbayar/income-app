@@ -3,13 +3,14 @@
 import { useEffect, useState } from "react";
 import HamburgerMenu from "./HamburgerMenu";
 
-function pickNameFromLocalStorage(): string {
+type Role = "seller" | "driver" | "";
+
+function pickUserFromLocalStorage(): { name: string; role: Role } {
   const keys = ["incomeUser", "user", "authUser"];
   for (const k of keys) {
     const raw = localStorage.getItem(k);
     if (!raw) continue;
 
-    // JSON байж магадгүй
     try {
       const u = JSON.parse(raw);
       const name =
@@ -20,26 +21,34 @@ function pickNameFromLocalStorage(): string {
         u?.phone ||
         u?.email ||
         "";
-      if (String(name).trim()) return String(name).trim();
+
+      const role = (u?.role || "") as Role;
+      if (String(name).trim()) return { name: String(name).trim(), role };
     } catch {
-      // text байж магадгүй
-      if (raw.trim()) return raw.trim();
+      if (raw.trim()) return { name: raw.trim(), role: "" };
     }
   }
-  return "";
+
+  return { name: "", role: "" };
 }
 
 export default function TahiHeader() {
   const [userName, setUserName] = useState("");
+  const [role, setRole] = useState<Role>("");
 
   useEffect(() => {
-    setUserName(pickNameFromLocalStorage());
+    const u = pickUserFromLocalStorage();
+    setUserName(u.name);
+    setRole(u.role);
   }, []);
+
+  const menuItems = [{ label: "Account", href: "/account" }];
+  if (role === "driver") menuItems.unshift({ label: "Профайл", href: "/driver/profile" });
+  if (role === "seller") menuItems.unshift({ label: "Шинэ хүргэлт", href: "/seller/new-delivery" });
 
   return (
     <div className="fixed top-0 left-0 right-0 z-50 border-b border-slate-200 bg-white/95 backdrop-blur">
       <div className="h-16 px-4 flex items-center justify-between">
-        {/* Left: Logo + Title */}
         <div className="flex items-center gap-3 min-w-0">
           <img
             src="/tahi.png"
@@ -53,19 +62,16 @@ export default function TahiHeader() {
           </div>
         </div>
 
-        {/* Right: Username + Hamburger */}
         <div className="flex items-center gap-3">
           {userName ? (
             <div className="max-w-[220px] truncate text-sm font-extrabold text-slate-800">
               {userName}
             </div>
           ) : (
-            <div className="max-w-[220px] truncate text-sm font-extrabold text-slate-500">
-              {/* Нэр олдохгүй үед хоосон байлгах боломжтой */}
-            </div>
+            <div className="max-w-[220px] truncate text-sm font-extrabold text-slate-500"></div>
           )}
 
-          <HamburgerMenu items={[{ label: "Account", href: "/account" }]} />
+          <HamburgerMenu items={menuItems} />
         </div>
       </div>
     </div>

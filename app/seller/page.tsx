@@ -734,31 +734,25 @@ export default function SellerDashboardPage() {
       <header className="border-b border-slate-200 bg-white">
         <div className="max-w-3xl mx-auto px-4 py-4">
           <div className="flex items-center justify-between gap-3">
-            <div>
-              <div className="text-xs font-semibold text-slate-500">
-                INCOME · Seller
-              </div>
-              <div className="text-2xl font-extrabold tracking-tight text-slate-900">
-                {user?.name || "—"}
+              {/* ❌ INCOME · Seller + нэрийг харуулахгүй */}
+              <div />
+
+              <div className="flex items-center gap-2">
+                {/* ✅ “Шинэ хүргэлт” хэвээр үлдээнэ */}
+                <button
+                  onClick={() => router.push("/seller/new-delivery")}
+                  className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700"
+                >
+                  Шинэ хүргэлт
+                </button>
+
+                {/* ❌ “Гарах” харагдуулахгүй (логик нь хэвээр) */}
+                <button onClick={logout} className="hidden" aria-hidden="true" tabIndex={-1}>
+                  Гарах
+                </button>
               </div>
             </div>
 
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => router.push("/seller/new-delivery")}
-                className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700"
-              >
-                + Шинэ хүргэлт
-              </button>
-
-              <button
-                onClick={logout}
-                className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:border-slate-300"
-              >
-                Гарах
-              </button>
-            </div>
-          </div>
 
           {error && (
             <div className="mt-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
