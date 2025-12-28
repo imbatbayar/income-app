@@ -9,6 +9,15 @@ export const dynamic = "force-dynamic";
  * - DONE дээр "Санал: ..." badge харагдахгүй
  * - "Төлбөр авсан" дарвал DELIVERED -> PAID
  * - PAID болсон карт DONE таб дээр доош орж, идэвхгүй (opacity+grayscale) болно
+ *
+ * ✅ RESTORED / FIXED (requested):
+ * - PICKUP таб дээр: "🚚 Барааг авч явлаа" (ASSIGNED -> ON_ROUTE + on_route_at set)
+ * - IN_TRANSIT таб дээр: "Санал: ..." орны оронд ⏱ timer явна (6 цаг давбал улаан)
+ *
+ * ✅ NEW FIX (requested NOW):
+ * - IN_TRANSIT (ON_ROUTE) үед Seller хаяг/утас биш,
+ *   Buyer (dropoff) хаяг + утас харагдана
+ * - Buyer руу очих Google map түргэн товч нэмэгдэнэ
  * =========================== */
 
 import React, { Suspense, useEffect, useMemo, useState } from "react";
@@ -116,10 +125,7 @@ function isNonEmpty(s: any) {
 }
 
 // ---------------- Next Suspense wrapper ----------------
-export default function DriverDashboard(props: {
-  initialTab?: DriverTabId;
-  routeMode?: boolean;
-}) {
+export default function DriverDashboard(props: { initialTab?: DriverTabId; routeMode?: boolean }) {
   return (
     <Suspense fallback={null}>
       <DriverPageInner initialTab={props.initialTab} routeMode={props.routeMode} />
@@ -167,7 +173,6 @@ function DriverPageInner(props: { initialTab?: DriverTabId; routeMode?: boolean 
 
   // ---------------- tab init ----------------
   useEffect(() => {
-    // Хэрвээ тухайн route initialTab өгсөн бол тэр нь default.
     if (props.initialTab) {
       setActiveTab(props.initialTab);
       return;
@@ -178,7 +183,7 @@ function DriverPageInner(props: { initialTab?: DriverTabId; routeMode?: boolean 
 
     const mapped = LEGACY_TAB_MAP[q] || (q as DriverTabId);
     if (mapped && DRIVER_TABS.find((t) => t.id === mapped)) setActiveTab(mapped);
-  }, [sp]);
+  }, [sp, props.initialTab]);
 
   // ---------------- data load ----------------
   useEffect(() => {
@@ -242,6 +247,15 @@ function DriverPageInner(props: { initialTab?: DriverTabId; routeMode?: boolean 
             "pickup_lng",
             "dropoff_lat",
             "dropoff_lng",
+
+            // ✅ Buyer/Dropoff details (ON_ROUTE үед driver-д хэрэгтэй)
+            "receiver_phone",
+            "landmark",
+            "pickup_contact_name",
+            "pickup_contact_phone",
+            "dropoff_contact_name",
+            "dropoff_contact_phone",
+
             "status",
             "created_at",
             "price_mnt",
@@ -251,6 +265,7 @@ function DriverPageInner(props: { initialTab?: DriverTabId; routeMode?: boolean 
             "driver_confirmed_payment",
             "dispute_opened_at",
             "closed_at",
+            "on_route_at", // ⭐️ timer эхлэх цаг
             "driver_hidden",
           ].join(",")
         )
@@ -378,7 +393,6 @@ function DriverPageInner(props: { initialTab?: DriverTabId; routeMode?: boolean 
     });
 
     if (activeTab === "DONE") {
-      // ✅ PAID болсон карт доошоо орно (идэвхгүй)
       return [...arr].sort((a, b) => {
         const ap = a.status === "PAID" ? 1 : 0;
         const bp = b.status === "PAID" ? 1 : 0;
@@ -469,6 +483,52 @@ function DriverPageInner(props: { initialTab?: DriverTabId; routeMode?: boolean 
     } catch (e: any) {
       console.error(e);
       setError("Хүсэлт цуцлахад алдаа гарлаа.");
+    } finally {
+      setActLoading((p) => ({ ...p, [deliveryId]: false }));
+    }
+  }
+
+  // ⭐️ PICKUP: ASSIGNED -> ON_ROUTE + on_route_at
+  async function startOnRoute(deliveryId: string) {
+    if (!user) return;
+    if (actLoading[deliveryId]) return;
+
+    setActLoading((p) => ({ ...p, [deliveryId]: true }));
+    setError(null);
+    setMsg(null);
+
+    try {
+      // Одоогийн item дээр on_route_at байвал дахиж overwrite хийхгүй
+      const current = items.find((x) => x.id === deliveryId);
+      const nowISO = new Date().toISOString();
+      const onRouteAt = (current as any)?.on_route_at ?? nowISO;
+
+      const { data, error: e1 } = await supabase
+        .from("deliveries")
+        .update({ status: "ON_ROUTE", on_route_at: onRouteAt })
+        .eq("id", deliveryId)
+        .eq("chosen_driver_id", user.id)
+        .eq("status", "ASSIGNED")
+        .select("id,status,on_route_at")
+        .maybeSingle();
+
+      if (e1) throw e1;
+
+      // UI-д шууд тусгах
+      setItems((prev) =>
+        prev.map((x) =>
+          x.id === deliveryId
+            ? ({ ...x, status: "ON_ROUTE" as any, on_route_at: (data as any)?.on_route_at ?? onRouteAt } as any)
+            : x
+        )
+      );
+
+      changeTab("IN_TRANSIT");
+      setMsg("🚚 Замд гарлаа.");
+      void fetchAll(user.id);
+    } catch (e: any) {
+      console.error(e);
+      setError("ON_ROUTE болгож эхлүүлэхэд алдаа гарлаа.");
     } finally {
       setActLoading((p) => ({ ...p, [deliveryId]: false }));
     }
@@ -728,9 +788,7 @@ function DriverPageInner(props: { initialTab?: DriverTabId; routeMode?: boolean 
               </div>
 
               {offersSplit.normal.length === 0 && offersSplit.pending.length === 0 ? (
-                <div className="rounded-2xl border border-slate-200 bg-white p-6 text-sm text-slate-600">
-                  Энэ таб дээр хүргэлт алга.
-                </div>
+                <div className="rounded-2xl border border-slate-200 bg-white p-6 text-sm text-slate-600">Энэ таб дээр хүргэлт алга.</div>
               ) : (
                 <>
                   {offersSplit.normal.length > 0 && (
@@ -745,6 +803,7 @@ function DriverPageInner(props: { initialTab?: DriverTabId; routeMode?: boolean 
                           actLoading={actLoading}
                           onRequest={requestDelivery}
                           onCancel={cancelRequest}
+                          onStartOnRoute={startOnRoute}
                           onMarkDelivered={markDelivered}
                           onMarkPaid={markPaid}
                           onHide={hideDelivered}
@@ -768,6 +827,7 @@ function DriverPageInner(props: { initialTab?: DriverTabId; routeMode?: boolean 
                             actLoading={actLoading}
                             onRequest={requestDelivery}
                             onCancel={cancelRequest}
+                            onStartOnRoute={startOnRoute}
                             onMarkDelivered={markDelivered}
                             onMarkPaid={markPaid}
                             onHide={hideDelivered}
@@ -782,9 +842,7 @@ function DriverPageInner(props: { initialTab?: DriverTabId; routeMode?: boolean 
               )}
             </>
           ) : filtered.length === 0 ? (
-            <div className="rounded-2xl border border-slate-200 bg-white p-6 text-sm text-slate-600">
-              Энэ tab дээр хүргэлт алга.
-            </div>
+            <div className="rounded-2xl border border-slate-200 bg-white p-6 text-sm text-slate-600">Энэ tab дээр хүргэлт алга.</div>
           ) : (
             <div className="grid grid-cols-1 gap-3">
               {filtered.map((d) => (
@@ -797,6 +855,7 @@ function DriverPageInner(props: { initialTab?: DriverTabId; routeMode?: boolean 
                   actLoading={actLoading}
                   onRequest={requestDelivery}
                   onCancel={cancelRequest}
+                  onStartOnRoute={startOnRoute}
                   onMarkDelivered={markDelivered}
                   onMarkPaid={markPaid}
                   onHide={hideDelivered}
@@ -830,7 +889,8 @@ function DriverPageInner(props: { initialTab?: DriverTabId; routeMode?: boolean 
                   <div className="min-w-0">
                     <div className="text-[15px] font-extrabold tracking-tight text-slate-900">🔍 Санал хайх</div>
                     <div className="mt-1 text-[12px] font-semibold text-slate-600">
-                      Та өөрт ойр байгаа хүргэлтүүдийг энэ хэсгээс хайгаарай. Тантай хамгийн ойр хүргэлтийн санал болон явах чиглэлд чинь хамгийн ойр байгаагаар нь эрэмблэн дээр гаргана.
+                      Та өөрт ойр байгаа хүргэлтүүдийг энэ хэсгээс хайгаарай. Тантай хамгийн ойр хүргэлтийн санал болон
+                      явах чиглэлд чинь хамгийн ойр байгаагаар нь эрэмблэн дээр гаргана.
                     </div>
                   </div>
                 </div>
@@ -859,9 +919,7 @@ function DriverPageInner(props: { initialTab?: DriverTabId; routeMode?: boolean 
 
                   <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
                     <div className="text-sm font-extrabold text-slate-900">🚦 Очих газар</div>
-                    <div className="mt-1 text-xs font-semibold text-slate-600">
-                      Очих дүүрэг/хороо сонгож эрэмбэлнэ. (Энгийн ойролцоолол)
-                    </div>
+                    <div className="mt-1 text-xs font-semibold text-slate-600">Очих дүүрэг/хороо сонгож эрэмбэлнэ. (Энгийн ойролцоолол)</div>
 
                     <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
                       <div>
@@ -911,6 +969,35 @@ function DriverPageInner(props: { initialTab?: DriverTabId; routeMode?: boolean 
   );
 }
 
+function TransitTimerBadge({ onRouteAt }: { onRouteAt: string }) {
+  const [now, setNow] = React.useState<number>(() => Date.now());
+
+  // секундээр бус минутын нарийвчлал хангалттай тул 10 секунд тутам update хийж байна
+  React.useEffect(() => {
+    const id = window.setInterval(() => setNow(Date.now()), 10_000);
+    return () => window.clearTimeout(id);
+  }, []);
+
+  const start = new Date(onRouteAt).getTime();
+  const elapsedSec = Math.max(0, Math.floor((now - start) / 1000));
+
+  const over6h = elapsedSec >= 21600; // 6 цаг
+  const totalMin = Math.floor(elapsedSec / 60);
+  const hours = Math.floor(totalMin / 60);
+  const mm = totalMin % 60;
+
+  return (
+    <span
+      className={
+        "inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-semibold " +
+        (over6h ? "border-red-200 bg-red-50 text-red-700" : "border-emerald-200 bg-emerald-50 text-emerald-800")
+      }
+    >
+      ⏱ {hours}ц {mm}м
+    </span>
+  );
+}
+
 function OfferCard(props: {
   d: DeliveryRow;
   user: IncomeUser;
@@ -919,13 +1006,14 @@ function OfferCard(props: {
   actLoading: Record<string, boolean>;
   onRequest: (id: string) => void;
   onCancel: (id: string) => void;
+  onStartOnRoute: (id: string) => void; // ⭐️ нэмэгдсэн
   onMarkDelivered: (id: string) => void;
   onMarkPaid: (id: string) => void;
   onHide: (id: string) => void;
   router: any;
   isPending?: boolean;
 }) {
-  const { d, user, sellerMap, activeTab, actLoading, onRequest, onCancel, onMarkDelivered, onMarkPaid, onHide, router, isPending } =
+  const { d, user, sellerMap, activeTab, actLoading, onRequest, onCancel, onStartOnRoute, onMarkDelivered, onMarkPaid, onHide, router, isPending } =
     props;
 
   const b = badge(d.status);
@@ -934,6 +1022,26 @@ function OfferCard(props: {
 
   const fromArea = areaLine(d.pickup_district, d.pickup_khoroo);
   const toArea = areaLine(d.dropoff_district, d.dropoff_khoroo);
+
+  // ✅ Buyer (dropoff) info — ON_ROUTE үед driver-д харагдах ёстой
+  const buyerPhone =
+    (d as any).dropoff_contact_phone ??
+    (d as any).receiver_phone ??
+    null;
+
+  const buyerAddressMain = (d as any).to_address ?? "";
+  const buyerLandmark = (d as any).landmark ?? "";
+  const buyerAddressFull = [buyerAddressMain, buyerLandmark].filter(Boolean).join(" · ");
+
+  const dropLat = toNum((d as any).dropoff_lat);
+  const dropLng = toNum((d as any).dropoff_lng);
+
+  const googleMapUrl =
+    dropLat != null && dropLng != null
+      ? `https://www.google.com/maps/dir/?api=1&destination=${dropLat},${dropLng}`
+      : buyerAddressFull
+      ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(buyerAddressFull)}`
+      : null;
 
   const bidCount = d.status === "OPEN" ? (isPending ? 1 : 0) : 0;
 
@@ -952,7 +1060,10 @@ function OfferCard(props: {
             {b.text}
           </span>
 
-          {activeTab === "DONE" ? null : (
+          {/* ✅ DONE таб дээр badge байхгүй. IN_TRANSIT дээр "Санал" орны оронд Timer */}
+          {activeTab === "DONE" ? null : activeTab === "IN_TRANSIT" && d.status === "ON_ROUTE" && isMine && (d as any).on_route_at ? (
+            <TransitTimerBadge onRouteAt={(d as any).on_route_at as string} />
+          ) : (
             <span className="inline-flex items-center rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700">
               Санал: {bidCount}
             </span>
@@ -976,27 +1087,57 @@ function OfferCard(props: {
         </div>
       </div>
 
-      {isMine && d.status !== "OPEN" && (
-        <div className="mt-3 rounded-xl border border-slate-200 bg-white p-3">
-          <div className="text-[11px] text-slate-500">Худалдагч</div>
-          <div className="mt-1 flex flex-wrap items-center gap-2">
-            <div className="text-sm font-semibold text-slate-800">{seller?.name || "—"}</div>
-            {seller?.phone ? (
-              <>
-                <div className="text-sm text-slate-600">{seller.phone}</div>
-                <a
-                  href={`tel:${seller.phone}`}
-                  className="ml-auto rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-900 hover:bg-emerald-100"
-                >
-                  Залгах
-                </a>
-              </>
-            ) : (
-              <div className="text-sm text-slate-500">Утас: —</div>
-            )}
+      {/* ✅ Seller info: ON_ROUTE үед харагдуулахгүй (driver-д одоо buyer л хэрэгтэй) */}
+        {isMine && d.status !== "OPEN" && !(activeTab === "IN_TRANSIT" && d.status === "ON_ROUTE") && (
+          <div className="mt-3 rounded-xl border border-slate-200 bg-white p-3">
+            <div className="text-[11px] text-slate-500">Худалдагч</div>
+            <div className="mt-1 flex flex-wrap items-center gap-2">
+              <div className="text-sm font-semibold text-slate-800">{seller?.name || "—"}</div>
+              {seller?.phone ? (
+                <>
+                  <div className="text-sm text-slate-600">{seller.phone}</div>
+                  <a
+                    href={`tel:${seller.phone}`}
+                    className="ml-auto rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-900 hover:bg-emerald-100"
+                  >
+                    Залгах
+                  </a>
+                </>
+              ) : (
+                <div className="text-sm text-slate-500">Утас: —</div>
+              )}
+            </div>
           </div>
-        </div>
-      )}
+        )}
+
+
+      {/* ✅ IN_TRANSIT (ON_ROUTE) үед Buyer (dropoff) хаяг/утас — ногоон UI */}
+          {activeTab === "IN_TRANSIT" && d.status === "ON_ROUTE" && isMine && (
+            <div className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50/40 p-3">
+              <div className="text-[11px] text-slate-500">Хүргэлт авах хүн</div>
+
+              <div className="mt-1 text-sm font-semibold text-slate-900 break-words">
+                {/* Дэлгэрэнгүй: Дүүрэг/хороо + бусад хаяг (to_address + landmark) */}
+                {[toArea, buyerAddressFull].filter(Boolean).join(" — ") || "Хаяг: —"}
+              </div>
+
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <div className="text-sm text-slate-700">
+                  Утас: <span className="font-semibold">{buyerPhone || "—"}</span>
+                </div>
+
+                {buyerPhone ? (
+                  <a
+                    href={`tel:${buyerPhone}`}
+                    className="ml-auto rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-900 hover:bg-emerald-100"
+                  >
+                    Залгах
+                  </a>
+                ) : null}
+              </div>
+            </div>
+          )}
+
 
       <div className="mt-4 flex items-center justify-end gap-2">
         {activeTab === "OFFERS" && d.status === "OPEN" && !isPending && (
@@ -1017,6 +1158,30 @@ function OfferCard(props: {
           >
             {actLoading[d.id] ? "Түр хүлээнэ үү…" : "🗑️ Хүсэлт цуцлах"}
           </button>
+        )}
+
+        {/* ⭐️ PICKUP дээр "Барааг авч явлаа" */}
+        {activeTab === "PICKUP" && d.status === "ASSIGNED" && isMine && (
+          <button
+            onClick={() => onStartOnRoute(d.id)}
+            disabled={!!actLoading[d.id]}
+            className="rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-2 text-sm font-semibold text-indigo-900 hover:bg-indigo-100 disabled:opacity-60"
+          >
+            {actLoading[d.id] ? "Түр хүлээнэ үү…" : "🚚 Барааг авч явлаа"}
+          </button>
+        )}
+
+        {/* ✅ IN_TRANSIT үед Buyer руу очих Google map */}
+        {activeTab === "IN_TRANSIT" && d.status === "ON_ROUTE" && isMine && googleMapUrl && (
+          <a
+            href={googleMapUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-900 hover:bg-emerald-100"
+
+          >
+            Google map
+          </a>
         )}
 
         {activeTab === "IN_TRANSIT" && d.status === "ON_ROUTE" && isMine && (

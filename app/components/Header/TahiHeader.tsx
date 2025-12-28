@@ -51,8 +51,8 @@ export default function TahiHeader() {
     setUserName(u.name);
     setRole(u.role);
   }, []);
-  
-    useEffect(() => {
+
+  useEffect(() => {
     const h = pathname === "/" || pathname === "/register" ? "0px" : "64px";
     document.documentElement.style.setProperty("--tahi-header-h", h);
   }, [pathname]);
@@ -67,8 +67,10 @@ export default function TahiHeader() {
   const menuItems = [{ label: "Account", href: "/account" }];
 
   if (isDriver) menuItems.unshift({ label: "Профайл", href: "/driver/profile" });
-  if (isSeller)
-    menuItems.unshift({ label: "Шинэ хүргэлт", href: "/seller/new-delivery" });
+  if (isSeller) menuItems.unshift({ label: "Шинэ хүргэлт", href: "/seller/new-delivery" });
+
+  // ✅ Нэрний өмнөх тэмдэг (UI-г өөрчлөхгүй, зөвхөн текст)
+  const namePrefix = isDriver ? "🚚 " : isSeller ? "🛍️ " : "";
 
   return (
     <div className="fixed top-0 left-0 right-0 z-50 border-b border-slate-200 bg-white/95 backdrop-blur">
@@ -89,6 +91,7 @@ export default function TahiHeader() {
         <div className="flex items-center gap-3">
           {userName ? (
             <div className="max-w-[220px] truncate text-sm font-extrabold text-slate-800">
+              {namePrefix}
               {userName}
             </div>
           ) : (

@@ -34,7 +34,7 @@ export type DeliveryRowSeller = {
   // UI-д тооцож нэмдэг
   bid_count?: number;
 
-  // замд гарсан мөч
+  // замд гарсан мөч (ON_ROUTE эхлэх цаг)
   on_route_at?: string | null;
 };
 
@@ -60,6 +60,9 @@ export type DeliveryRowDriver = {
   status: DeliveryStatus;
   created_at: string;
 
+  // ⭐️ замд гарсан мөч (Driver timer эхлэх)
+  on_route_at?: string | null;
+
   price_mnt: number | null;
   delivery_type: string | null;
 
@@ -73,8 +76,19 @@ export type DeliveryRowDriver = {
   closed_at: string | null;
 
   driver_hidden: boolean;
+
+  // ✅ Buyer / Dropoff талын дэлгэрэнгүй (ON_ROUTE үед хэрэгтэй)
+  receiver_phone?: string | null; // legacy
+  landmark?: string | null;
+
+  pickup_contact_name?: string | null;
+  pickup_contact_phone?: string | null;
+
+  dropoff_contact_name?: string | null;
+  dropoff_contact_phone?: string | null;
 };
 
+// ---------------- Bids ----------------
 export type BidLite = {
   id: string;
   driver_id: string;
@@ -82,6 +96,7 @@ export type BidLite = {
   created_at: string;
 };
 
+// ---------------- Seller lite ----------------
 export type SellerLite = {
   id: string;
   name: string | null;
