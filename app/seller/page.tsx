@@ -4,185 +4,18 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import {
-  DeliveryStatus,
   SELLER_TABS,
   SellerTabId,
   getSellerTabForStatus,
 } from "@/lib/deliveryLogic";
+import type { IncomeUser } from "@/lib/types";
+import type { DeliveryRowSeller } from "@/lib/deliveries";
 
-// ✅ NEW: SHARE button component (UI/logic бусдыг оролдохгүй)
-import ShareDeliveryButton from "@/app/components/ShareDeliveryButton";
+import Pill from "@/app/seller/_components/Pill";
+import OpenCard from "@/app/seller/_components/OpenCard";
+import DeliveryCardNormal from "@/app/seller/_components/DeliveryCardNormal";
 
-type Role = "seller" | "driver";
-
-type IncomeUser = {
-  id: string;
-  role: Role;
-  name: string;
-  phone: string;
-  email: string;
-};
-
-type DeliveryRow = {
-  id: string;
-  seller_id: string;
-
-  from_address: string | null;
-  to_address: string | null;
-  note: string | null;
-
-  pickup_district: string | null;
-  pickup_khoroo: string | null;
-  dropoff_district: string | null;
-  dropoff_khoroo: string | null;
-
-  // ✅ NEW: координатууд (postер + map-д хэрэгтэй)
-  pickup_lat: number | null;
-  pickup_lng: number | null;
-  dropoff_lat: number | null;
-  dropoff_lng: number | null;
-
-  status: DeliveryStatus;
-  created_at: string;
-  price_mnt: number | null;
-  delivery_type: string | null;
-  chosen_driver_id: string | null;
-
-  seller_hidden: boolean;
-  bid_count?: number;
-
-  // ✅ замд гарсан мөч
-  on_route_at?: string | null;
-};
-
-function fmtPrice(n: number | null | undefined) {
-  const v = Number(n || 0);
-  return v ? `${v.toLocaleString("mn-MN")}₮` : "Үнэ тохиролцоно";
-}
-
-function shorten(s: string | null, max = 72) {
-  if (!s) return "—";
-  const t = s.trim();
-  if (t.length <= max) return t;
-  return t.slice(0, max).replace(/\s+$/, "") + "…";
-}
-
-function areaLine(district?: string | null, khoroo?: string | null) {
-  const d = (district || "").trim();
-  const k = (khoroo || "").trim();
-
-  if (d && k) return `${d} · ${k}`;
-  if (d) return d;
-  if (k) return k;
-  return "—";
-}
-
-function badge(status: DeliveryStatus) {
-  switch (status) {
-    case "OPEN":
-      return {
-        text: "Нээлттэй",
-        cls: "border-emerald-200 bg-emerald-50/70 text-emerald-700",
-      };
-    case "ASSIGNED":
-      return {
-        text: "Сонгосон",
-        cls: "border-indigo-200 bg-indigo-50 text-indigo-700",
-      };
-    case "ON_ROUTE":
-      return {
-        text: "Замд гарлаа",
-        cls: "border-amber-200 bg-amber-50 text-amber-700",
-      };
-    // ✅ NEW: PAID badge (бага зэрэг ногоон)
-    case "PAID":
-      return {
-        text: "Төлсөн",
-        cls: "border-emerald-200 bg-emerald-50 text-emerald-800",
-      };
-    case "DELIVERED":
-    default:
-      return {
-        text: "Хүргэсэн",
-        cls: "border-slate-200 bg-slate-50 text-slate-700",
-      };
-  }
-}
-
-// ✅ hh:mm (амьд тоологдоно)
-function routeHHMM(onRouteAt?: string | null) {
-  if (!onRouteAt) return "00:00";
-  const t = new Date(onRouteAt).getTime();
-  if (!Number.isFinite(t)) return "00:00";
-  const ms = Date.now() - t;
-  if (ms <= 0) return "00:00";
-
-  const totalMin = Math.floor(ms / 60000);
-  const hh = String(Math.floor(totalMin / 60)).padStart(2, "0");
-  const mm = String(totalMin % 60).padStart(2, "0");
-  return `${hh}:${mm}`;
-}
-
-// ✅ late шалгахын тулд (3+ цаг гэх мэт)
-function routeTotalHours(onRouteAt?: string | null) {
-  if (!onRouteAt) return 0;
-  const t = new Date(onRouteAt).getTime();
-  if (!Number.isFinite(t)) return 0;
-  const ms = Date.now() - t;
-  if (ms <= 0) return 0;
-  return ms / 3600000;
-}
-
-function Pill({
-  label,
-  value,
-  active,
-  onClick,
-}: {
-  label: string;
-  value: string;
-  active?: boolean;
-  onClick?: () => void;
-}) {
-  const base = "w-full rounded-xl border px-3 py-2 text-left transition-colors";
-  const cls = active
-    ? "border-emerald-200 bg-emerald-50/70"
-    : "border-slate-200 bg-white hover:bg-slate-50";
-
-  const Comp: any = onClick ? "button" : "div";
-
-  return (
-    <Comp onClick={onClick} className={`${base} ${cls}`}>
-      <div className="text-[11px] text-slate-500">{label}</div>
-      <div className="text-sm font-extrabold tracking-tight text-slate-900">
-        {value}
-      </div>
-    </Comp>
-  );
-}
-
-async function copyText(text: string) {
-  try {
-    await navigator.clipboard.writeText(text);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function buildSharePostSimple(d: DeliveryRow) {
-  const fromArea = areaLine(d.pickup_district, d.pickup_khoroo);
-  const toArea = areaLine(d.dropoff_district, d.dropoff_khoroo);
-  const price = fmtPrice(d.price_mnt);
-  const what = d.note ? d.note.trim() : "";
-  return (
-    `🚚 Delivery\n` +
-    `📍 ${fromArea} → ${toArea}\n` +
-    `💰 ${price}\n` +
-    (what ? `📦 ${what}\n` : "") +
-    `#INCOME`
-  );
-}
+import { buildSharePostSimple, copyText } from "@/app/seller/_lib/sellerUtils";
 
 export default function SellerDashboardPage() {
   const router = useRouter();
@@ -192,7 +25,7 @@ export default function SellerDashboardPage() {
   const [activeTab, setActiveTab] = useState<SellerTabId>("OPEN");
 
   const [loading, setLoading] = useState(true);
-  const [items, setItems] = useState<DeliveryRow[]>([]);
+  const [items, setItems] = useState<DeliveryRowSeller[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
 
@@ -291,7 +124,7 @@ export default function SellerDashboardPage() {
 
       if (e1) throw e1;
 
-      const rows = (data || []) as DeliveryRow[];
+      const rows = (data || []) as DeliveryRowSeller[];
 
       const openIds = rows.filter((r) => r.status === "OPEN").map((r) => r.id);
       const bidMap: Record<string, number> = {};
@@ -347,7 +180,7 @@ export default function SellerDashboardPage() {
 
     // ✅ DELIVERED таб дээр: PAID нь доор орно
     if (activeTab === "DELIVERED") {
-      const rank = (s: DeliveryStatus) => (s === "PAID" ? 1 : 0); // DELIVERED=0, PAID=1
+      const rank = (s: any) => (s === "PAID" ? 1 : 0); // DELIVERED=0, PAID=1
       const copy = [...filtered];
       copy.sort((a, b) => {
         const ra = rank(a.status);
@@ -387,7 +220,7 @@ export default function SellerDashboardPage() {
     setActLoading((prev) => ({ ...prev, [deliveryId]: v }));
   }
 
-  function openDetail(d: DeliveryRow) {
+  function openDetail(d: DeliveryRowSeller) {
     router.push(`/seller/delivery/${d.id}`);
   }
 
@@ -430,7 +263,7 @@ export default function SellerDashboardPage() {
                 ...x,
                 status: "ON_ROUTE",
                 on_route_at: now,
-              } as DeliveryRow)
+              } as DeliveryRowSeller)
             : x
         )
       );
@@ -472,7 +305,7 @@ export default function SellerDashboardPage() {
     }
   }
 
-  async function shareFacebookOpenOnly(d: DeliveryRow) {
+  async function shareFacebookOpenOnly(d: DeliveryRowSeller) {
     try {
       setMsg(null);
       setError(null);
@@ -496,10 +329,7 @@ export default function SellerDashboardPage() {
   }
 
   // ✅ Найдваргүй жолооч
-  async function markDriverUnreliable(
-    deliveryId: string,
-    driverId: string | null
-  ) {
+  async function markDriverUnreliable(deliveryId: string, driverId: string | null) {
     if (!user) return;
     if (!driverId) return;
     if (actLoading[deliveryId]) return;
@@ -543,216 +373,34 @@ export default function SellerDashboardPage() {
     }
   }
 
-  // ✅ OPEN card
-  function OpenCard({ d }: { d: DeliveryRow }) {
-    const b = badge(d.status);
-    const fromArea = areaLine(d.pickup_district, d.pickup_khoroo);
-    const toArea = areaLine(d.dropoff_district, d.dropoff_khoroo);
-
-    return (
-      <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
-              <span
-                className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs ${b.cls}`}
-              >
-                {b.text}
-              </span>
-
-              {typeof d.bid_count === "number" && (
-                <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-xs font-semibold text-slate-700">
-                  Санал: {d.bid_count}
-                </span>
-              )}
-            </div>
-
-            <div className="mt-2 text-sm font-semibold leading-snug">
-              <span className="text-emerald-700">{fromArea}</span>
-              <span className="mx-2 text-slate-400">→</span>
-              <span className="text-emerald-900">{toArea}</span>
-            </div>
-          </div>
-
-          <div className="shrink-0">
-            <div className="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50/70 px-3 py-1 text-sm font-extrabold tracking-tight text-emerald-700">
-              {fmtPrice(d.price_mnt)}
-            </div>
-          </div>
-        </div>
-
-        <div className="mt-3">
-          <button
-            onClick={() => openDetail(d)}
-            className="inline-flex w-full items-center gap-2 rounded-2xl border border-emerald-200 bg-emerald-50/70 px-3 py-2 text-sm font-semibold text-emerald-900 hover:bg-emerald-100/70"
-            title="Дэлгэрэнгүй"
-          >
-            <span className="text-emerald-700">📦</span>
-            <span className="min-w-0 truncate text-emerald-900">
-              {d.note ? shorten(d.note, 90) : "—"}
-            </span>
-          </button>
-        </div>
-
-        <div className="mt-3 flex items-center justify-end gap-2">
-          <button
-            onClick={() => openDetail(d)}
-            className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-900 hover:border-slate-300"
-            title="OPEN"
-          >
-            📂 OPEN
-          </button>
-
-          {/* ✅ зөвхөн SHARE товч (payload-д map мэдээлэл өгнө) */}
-          <ShareDeliveryButton
-            payload={{
-              id: d.id,
-              from: fromArea,
-              to: toArea,
-              priceText: fmtPrice(d.price_mnt),
-              note: d.note || "",
-
-              // ✅ постерийн “гоё” хэсгүүд
-              price_mnt: d.price_mnt,
-              pickup_district: d.pickup_district,
-              pickup_khoroo: d.pickup_khoroo,
-              dropoff_district: d.dropoff_district,
-              dropoff_khoroo: d.dropoff_khoroo,
-              pickup_lat: d.pickup_lat,
-              pickup_lng: d.pickup_lng,
-              dropoff_lat: d.dropoff_lat,
-              dropoff_lng: d.dropoff_lng,
-            }}
-            onToast={(t) => setMsg(t)}
-            className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-900 hover:border-slate-300 disabled:opacity-60"
-          />
-        </div>
-      </div>
-    );
-  }
-
-  function DeliveryCardNormal({ d }: { d: DeliveryRow }) {
-    const b = badge(d.status);
-    const fromArea = areaLine(d.pickup_district, d.pickup_khoroo);
-    const toArea = areaLine(d.dropoff_district, d.dropoff_khoroo);
-
-    const hhmm = d.status === "ON_ROUTE" ? routeHHMM(d.on_route_at) : "00:00";
-    const hours = d.status === "ON_ROUTE" ? routeTotalHours(d.on_route_at) : 0;
-    const isLate = d.status === "ON_ROUTE" && hours >= 3;
-
-    return (
-      <div
-        className={[
-          "rounded-2xl border p-4",
-          d.status === "PAID"
-            ? "border-emerald-200 bg-emerald-50/40"
-            : "border-slate-200 bg-white",
-        ].join(" ")}
-      >
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
-              <span
-                className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs ${b.cls}`}
-              >
-                {b.text}
-              </span>
-
-              {/* ✅ ON_ROUTE дээр цаг:минут */}
-              {d.status === "ON_ROUTE" && (
-                <span
-                  className={[
-                    "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-extrabold",
-                    isLate
-                      ? "border-red-200 bg-red-50 text-red-700"
-                      : "border-emerald-200 bg-emerald-50/70 text-emerald-700",
-                  ].join(" ")}
-                  title="Замд гарснаас хойш"
-                >
-                  ⏱ {hhmm}
-                </span>
-              )}
-            </div>
-
-            <div className="mt-2 text-sm font-semibold">
-              <span className="text-emerald-700">{fromArea}</span>
-              <span className="mx-2 text-slate-400">→</span>
-              <span className="text-emerald-900">{toArea}</span>
-            </div>
-
-            <div className="mt-2 text-sm font-bold text-emerald-700">
-              {fmtPrice(d.price_mnt)}
-            </div>
-          </div>
-
-          <div className="flex shrink-0 flex-col gap-2 sm:items-end">
-            <button
-              onClick={() => openDetail(d)}
-              className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-900 hover:border-slate-300"
-            >
-              Дэлгэрэнгүй
-            </button>
-
-            {d.status === "ASSIGNED" && (
-              <button
-                onClick={() => void markPickedUp(d.id)}
-                disabled={!!actLoading[d.id]}
-                className={[
-                  "rounded-xl px-4 py-2 text-sm font-semibold text-white",
-                  actLoading[d.id]
-                    ? "bg-emerald-400"
-                    : "bg-emerald-600 hover:bg-emerald-700",
-                ].join(" ")}
-              >
-                Жолооч барааг авч явлаа
-              </button>
-            )}
-
-            {/* ✅ DELIVERED + PAID дээр delete харагдана */}
-            {(d.status === "DELIVERED" || d.status === "PAID") && (
-              <button
-                onClick={() => void deleteDelivered(d.id)}
-                disabled={!!actLoading[d.id]}
-                className={[
-                  "rounded-xl px-4 py-2 text-sm font-semibold text-white",
-                  actLoading[d.id]
-                    ? "bg-slate-400"
-                    : "bg-slate-900 hover:bg-slate-800",
-                ].join(" ")}
-              >
-                delete 🗑️
-              </button>
-            )}
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="min-h-screen bg-slate-50">
       <header className="border-b border-slate-200 bg-white">
         <div className="max-w-3xl mx-auto px-4 py-4">
           <div className="flex items-center justify-between gap-3">
-              {/* ❌ INCOME · Seller + нэрийг харуулахгүй */}
-              <div />
+            {/* ❌ INCOME · Seller + нэрийг харуулахгүй */}
+            <div />
 
-              <div className="flex items-center gap-2">
-                {/* ✅ “Шинэ хүргэлт” хэвээр үлдээнэ */}
-                <button
-                  onClick={() => router.push("/seller/new-delivery")}
-                  className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700"
-                >
-                  + Шинэ хүргэлт
-                </button>
+            <div className="flex items-center gap-2">
+              {/* ✅ “Шинэ хүргэлт” хэвээр үлдээнэ */}
+              <button
+                onClick={() => router.push("/seller/new-delivery")}
+                className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700"
+              >
+                + Шинэ хүргэлт
+              </button>
 
-                {/* ❌ “Гарах” харагдуулахгүй (логик нь хэвээр) */}
-                <button onClick={logout} className="hidden" aria-hidden="true" tabIndex={-1}>
-                  Гарах
-                </button>
-              </div>
+              {/* ❌ “Гарах” харагдуулахгүй (логик нь хэвээр) */}
+              <button
+                onClick={logout}
+                className="hidden"
+                aria-hidden="true"
+                tabIndex={-1}
+              >
+                Гарах
+              </button>
             </div>
-
+          </div>
 
           {error && (
             <div className="mt-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
@@ -813,8 +461,27 @@ export default function SellerDashboardPage() {
         ) : (
           <div className="grid gap-3">
             {sorted.map((d) => {
-              if (activeTab === "OPEN") return <OpenCard key={d.id} d={d} />;
-              return <DeliveryCardNormal key={d.id} d={d} />;
+              if (activeTab === "OPEN") {
+                return (
+                  <OpenCard
+                    key={d.id}
+                    d={d}
+                    onOpenDetail={openDetail}
+                    onToast={(t) => setMsg(t)}
+                  />
+                );
+              }
+
+              return (
+                <DeliveryCardNormal
+                  key={d.id}
+                  d={d}
+                  actLoading={actLoading}
+                  onOpenDetail={openDetail}
+                  onMarkPickedUp={(id) => void markPickedUp(id)}
+                  onDeleteDelivered={(id) => void deleteDelivered(id)}
+                />
+              );
             })}
           </div>
         )}

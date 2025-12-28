@@ -14,86 +14,14 @@ export const dynamic = "force-dynamic";
 import React, { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import { DRIVER_TABS, DriverTabId, DeliveryStatus, getDriverTabForStatus } from "@/lib/deliveryLogic";
+import type { IncomeUser } from "@/lib/types";
+import type { DeliveryRowDriver, BidLite, SellerLite } from "@/lib/deliveries";
 
-// ---------------- Types ----------------
-type Role = "seller" | "driver";
-
-type IncomeUser = {
-  id: string;
-  role: Role;
-  name: string;
-  phone: string;
-  email: string;
-};
-
-type DeliveryStatus =
-  | "OPEN"
-  | "ASSIGNED"
-  | "ON_ROUTE"
-  | "DELIVERED"
-  | "PAID"
-  | "DISPUTE"
-  | "CLOSED"
-  | "CANCELLED";
-
-type DeliveryRow = {
-  id: string;
-  seller_id: string;
-
-  from_address: string | null;
-  to_address: string | null;
-  note: string | null;
-
-  pickup_district: string | null;
-  pickup_khoroo: string | null;
-  dropoff_district: string | null;
-  dropoff_khoroo: string | null;
-
-  pickup_lat: number | null;
-  pickup_lng: number | null;
-  dropoff_lat: number | null;
-  dropoff_lng: number | null;
-
-  status: DeliveryStatus;
-  created_at: string;
-
-  price_mnt: number | null;
-  delivery_type: string | null;
-
-  chosen_driver_id: string | null;
-
-  seller_marked_paid: boolean;
-  driver_confirmed_payment: boolean;
-
-  dispute_opened_at: string | null;
-  closed_at: string | null;
-
-  driver_hidden: boolean;
-};
-
-type BidLite = {
-  id: string;
-  driver_id: string;
-  delivery_id: string;
-  created_at: string;
-};
-
-type SellerLite = {
-  id: string;
-  name: string | null;
-  phone: string | null;
-};
+// Alias (хуучин код эвдэхгүй)
+type DeliveryRow = DeliveryRowDriver;
 
 // ---------------- Tabs (driver) ----------------
-type DriverTabId = "OFFERS" | "PICKUP" | "IN_TRANSIT" | "DONE";
-
-const DRIVER_TABS: { id: DriverTabId; label: string }[] = [
-  { id: "OFFERS", label: "📦 Санал" },
-  { id: "PICKUP", label: "📥 Ирж аваарай" },
-  { id: "IN_TRANSIT", label: "📤 Хүргэлт эхэлсэн" },
-  { id: "DONE", label: "🎉 Хүргэчихлээ" },
-];
-
 const LEGACY_TAB_MAP: Record<string, DriverTabId> = {
   OPEN: "OFFERS",
   ASSIGNED: "PICKUP",
@@ -104,25 +32,6 @@ const LEGACY_TAB_MAP: Record<string, DriverTabId> = {
   PICKUP: "PICKUP",
   IN_TRANSIT: "IN_TRANSIT",
 };
-
-function getDriverTabForStatus(status: DeliveryStatus): DriverTabId {
-  switch (status) {
-    case "OPEN":
-      return "OFFERS";
-    case "ASSIGNED":
-      return "PICKUP";
-    case "ON_ROUTE":
-      return "IN_TRANSIT";
-    case "DELIVERED":
-      return "DONE";
-    case "PAID":
-    case "DISPUTE":
-    case "CLOSED":
-    case "CANCELLED":
-    default:
-      return "DONE";
-  }
-}
 
 // ---------------- Helpers ----------------
 function fmtPrice(n: number | null | undefined) {
