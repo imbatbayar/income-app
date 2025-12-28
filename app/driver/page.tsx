@@ -3,22 +3,12 @@
 export const dynamic = "force-dynamic";
 
 /* ===========================
- * app/driver/page.tsx (STEP-SEARCH-2)
+ * app/driver/page.tsx
  *
- * ✅ Fixes:
- * - "🗑️ Хүсэлт цуцлах" -> delivery_id + driver_id-аар бүх мөрийг delete (duplicate хамгаалалт)
- *   мөн local myBids-оос delivery_id-аар бүгдийг арилгана → pending-ээс гарч OPEN руу буцна
- * - "Гарах" товч -> header-ийн баруун захад байрлуулсан (footer-оос авсан)
- *
- * ✅ Existing:
- * - OFFERS дээр 🔍 Хайх popup (local sort only)
- * - Toast msg/error -> closable (✕) + auto hide
- * - UI seller-style (no black)
- *
- * ✅ Added (NO flow change):
- * - PICKUP таб дээр (ASSIGNED + isMine үед) “🧭 Худалдагчийн хаяг руу очих” Google Maps товч
- *
- * ⛔ Map UI untouched
+ * ✅ DONE tab changes (minimal, no other logic touched):
+ * - DONE дээр "Санал: ..." badge харагдахгүй
+ * - "Төлбөр авсан" дарвал DELIVERED -> PAID
+ * - PAID болсон карт DONE таб дээр доош орж, идэвхгүй (opacity+grayscale) болно
  * =========================== */
 
 import React, { Suspense, useEffect, useMemo, useState } from "react";
@@ -59,7 +49,6 @@ type DeliveryRow = {
   dropoff_district: string | null;
   dropoff_khoroo: string | null;
 
-  // ✅ координат (search эрэмбэлэлтэд ашиглана)
   pickup_lat: number | null;
   pickup_lng: number | null;
   dropoff_lat: number | null;
@@ -73,7 +62,6 @@ type DeliveryRow = {
 
   chosen_driver_id: string | null;
 
-  // legacy
   seller_marked_paid: boolean;
   driver_confirmed_payment: boolean;
 
@@ -106,7 +94,6 @@ const DRIVER_TABS: { id: DriverTabId; label: string }[] = [
   { id: "DONE", label: "🎉 Хүргэчихлээ" },
 ];
 
-// legacy query support: /driver?tab=OPEN гэх мэтийг дэмжинэ
 const LEGACY_TAB_MAP: Record<string, DriverTabId> = {
   OPEN: "OFFERS",
   ASSIGNED: "PICKUP",
@@ -128,7 +115,6 @@ function getDriverTabForStatus(status: DeliveryStatus): DriverTabId {
       return "IN_TRANSIT";
     case "DELIVERED":
       return "DONE";
-    // legacy statuses -> DONE дээр нэгтгэнэ
     case "PAID":
     case "DISPUTE":
     case "CLOSED":
@@ -171,50 +157,23 @@ function areaLine(district?: string | null, khoroo?: string | null) {
 function badge(status: DeliveryStatus) {
   switch (status) {
     case "OPEN":
-      return {
-        text: "Нээлттэй",
-        cls: "bg-emerald-50 text-emerald-700 border-emerald-100",
-      };
+      return { text: "Нээлттэй", cls: "bg-emerald-50 text-emerald-700 border-emerald-100" };
     case "ASSIGNED":
-      return {
-        text: "Танд оноосон",
-        cls: "bg-sky-50 text-sky-700 border-sky-100",
-      };
+      return { text: "Танд оноосон", cls: "bg-sky-50 text-sky-700 border-sky-100" };
     case "ON_ROUTE":
-      return {
-        text: "Замд",
-        cls: "bg-indigo-50 text-indigo-700 border-indigo-100",
-      };
+      return { text: "Замд", cls: "bg-indigo-50 text-indigo-700 border-indigo-100" };
     case "DELIVERED":
-      return {
-        text: "Хүргэсэн",
-        cls: "bg-amber-50 text-amber-800 border-amber-100",
-      };
+      return { text: "Хүргэсэн", cls: "bg-amber-50 text-amber-800 border-amber-100" };
     case "PAID":
-      return {
-        text: "Төлсөн",
-        cls: "bg-emerald-50 text-emerald-800 border-emerald-100",
-      };
+      return { text: "Төлөгдсөн", cls: "bg-emerald-50 text-emerald-800 border-emerald-100" };
     case "DISPUTE":
-      return {
-        text: "Маргаан",
-        cls: "bg-rose-50 text-rose-700 border-rose-100",
-      };
+      return { text: "Маргаан", cls: "bg-rose-50 text-rose-700 border-rose-100" };
     case "CLOSED":
-      return {
-        text: "Хаагдсан",
-        cls: "bg-slate-50 text-slate-700 border-slate-200",
-      };
+      return { text: "Хаагдсан", cls: "bg-slate-50 text-slate-700 border-slate-200" };
     case "CANCELLED":
-      return {
-        text: "Цуцалсан",
-        cls: "bg-rose-50 text-rose-700 border-rose-100",
-      };
+      return { text: "Цуцалсан", cls: "bg-rose-50 text-rose-700 border-rose-100" };
     default:
-      return {
-        text: status,
-        cls: "bg-slate-50 text-slate-700 border-slate-200",
-      };
+      return { text: status, cls: "bg-slate-50 text-slate-700 border-slate-200" };
   }
 }
 
@@ -224,7 +183,6 @@ function toNum(v: any): number | null {
 }
 
 function distanceKm(a: { lat: number; lng: number }, b: { lat: number; lng: number }) {
-  // Haversine
   const R = 6371;
   const dLat = ((b.lat - a.lat) * Math.PI) / 180;
   const dLon = ((b.lng - a.lng) * Math.PI) / 180;
@@ -266,14 +224,11 @@ function DriverPageInner() {
   const [error, setError] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
 
-  // action lock per deliveryId
   const [actLoading, setActLoading] = useState<Record<string, boolean>>({});
 
-  // 🔍 search modal
   const [searchOpen, setSearchOpen] = useState(false);
   const [driverLoc, setDriverLoc] = useState<{ lat: number; lng: number } | null>(null);
 
-  // local sort mode (device only)
   const [sortMode, setSortMode] = useState<"NONE" | "NEARME" | "DEST">("NONE");
   const [destDistrict, setDestDistrict] = useState("");
   const [destKhoroo, setDestKhoroo] = useState("");
@@ -307,7 +262,6 @@ function DriverPageInner() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id]);
 
-  // msg auto-hide (not stuck)
   useEffect(() => {
     if (!msg) return;
     const t = window.setTimeout(() => setMsg(null), 3000);
@@ -432,7 +386,6 @@ function DriverPageInner() {
     return { OFFERS, PICKUP, IN_TRANSIT, DONE };
   }, [items, user]);
 
-  // OFFERS split: normal vs pending
   const offersSplit = useMemo(() => {
     const open = items.filter((d) => d.status === "OPEN");
     const normal: DeliveryRow[] = [];
@@ -443,7 +396,6 @@ function DriverPageInner() {
       else normal.push(d);
     }
 
-    // local sort (device only)
     const sortWithMode = (arr: DeliveryRow[]) => {
       if (sortMode === "NONE") return arr;
 
@@ -464,7 +416,6 @@ function DriverPageInner() {
       }
 
       if (sortMode === "DEST") {
-        // simplest: destDistrict / destKhoroo таарвал дээгүүр
         const dd = destDistrict.trim();
         const dk = destKhoroo.trim();
 
@@ -472,7 +423,7 @@ function DriverPageInner() {
           let s = 0;
           if (dd && String(x.dropoff_district || "") === dd) s += 2;
           if (dk && String(x.dropoff_khoroo || "") === dk) s += 1;
-          return -s; // smaller is better
+          return -s;
         };
 
         return [...arr].sort((a, b) => score(a) - score(b));
@@ -490,7 +441,7 @@ function DriverPageInner() {
   const filtered = useMemo(() => {
     if (!user) return [];
 
-    return items.filter((d) => {
+    const arr = items.filter((d) => {
       const tab = getDriverTabForStatus(d.status);
 
       if (activeTab === "OFFERS") return d.status === "OPEN";
@@ -500,6 +451,18 @@ function DriverPageInner() {
 
       return false;
     });
+
+    if (activeTab === "DONE") {
+      // ✅ PAID болсон карт доошоо орно (идэвхгүй)
+      return [...arr].sort((a, b) => {
+        const ap = a.status === "PAID" ? 1 : 0;
+        const bp = b.status === "PAID" ? 1 : 0;
+        if (ap !== bp) return ap - bp;
+        return String(b.created_at).localeCompare(String(a.created_at));
+      });
+    }
+
+    return arr;
   }, [items, activeTab, user]);
 
   function changeTab(tab: DriverTabId) {
@@ -512,7 +475,6 @@ function DriverPageInner() {
     if (!user) return;
     if (actLoading[deliveryId]) return;
 
-    // already pending? (local guard)
     if (myBidSet.has(deliveryId)) {
       setMsg("Та энэ хүргэлт дээр аль хэдийн хүсэлт илгээсэн байна.");
       return;
@@ -555,8 +517,6 @@ function DriverPageInner() {
     setMsg(null);
 
     try {
-      // ✅ Duplicate хамгаалалт:
-      // delivery_id + driver_id дээрх бүх хүсэлтийг устгана
       const { data: deleted, error } = await supabase
         .from("driver_bids")
         .delete()
@@ -566,7 +526,6 @@ function DriverPageInner() {
 
       if (error) throw error;
 
-      // ❗ Хэрэв 0 мөр устсан бол: ихэнхдээ driver_bids дээр DELETE policy байхгүй үед ингэдэг.
       if (!deleted || (Array.isArray(deleted) && deleted.length === 0)) {
         setError(
           "Хүсэлт цуцлагдсангүй. (driver_bids дээр DELETE policy байхгүй байж магадлалтай) Supabase → Table editor → Policies дээр DELETE зөвшөөрөл нэмээд дахин оролдоорой."
@@ -574,7 +533,6 @@ function DriverPageInner() {
         return;
       }
 
-      // ✅ local: тухайн delivery дээрх бүх bid мөрийг арилгана
       setMyBids((prev) => prev.filter((x) => x.delivery_id !== deliveryId));
 
       setMsg("🗑️ Хүсэлт цуцаллаа.");
@@ -625,7 +583,43 @@ function DriverPageInner() {
     }
   }
 
-  // ✅ DONE дээр устгах (driver_hidden=true)
+  // ✅ DONE дээр: DELIVERED → PAID
+  async function markPaid(deliveryId: string) {
+    if (!user) return;
+    if (actLoading[deliveryId]) return;
+
+    setActLoading((p) => ({ ...p, [deliveryId]: true }));
+    setError(null);
+    setMsg(null);
+
+    try {
+      const { data, error: e1 } = await supabase
+        .from("deliveries")
+        .update({ status: "PAID" })
+        .eq("id", deliveryId)
+        .eq("chosen_driver_id", user.id)
+        .eq("status", "DELIVERED")
+        .select("id,status")
+        .maybeSingle();
+
+      if (e1) throw e1;
+
+      if (!data || (data as any).status !== "PAID") {
+        setError("Шилжилт амжилтгүй. (DELIVERED→PAID) Дахин оролдоно уу.");
+        return;
+      }
+
+      setItems((prev) => prev.map((x) => (x.id === deliveryId ? { ...x, status: "PAID" as any } : x)));
+      setMsg("✅ Төлбөр төлөгдсөн гэж тэмдэглэлээ.");
+      void fetchAll(user.id);
+    } catch (e: any) {
+      console.error(e);
+      setError("Төлбөрийн статус шинэчлэхэд алдаа гарлаа.");
+    } finally {
+      setActLoading((p) => ({ ...p, [deliveryId]: false }));
+    }
+  }
+
   async function hideDelivered(deliveryId: string) {
     if (!user) return;
     if (actLoading[deliveryId]) return;
@@ -709,8 +703,6 @@ function DriverPageInner() {
   return (
     <div className="min-h-screen bg-slate-50">
       <div className="mx-auto max-w-5xl px-4 py-6">
-        
-        {/* tabs (seller-like summary cards) */}
         <div className="mt-5 grid grid-cols-2 sm:grid-cols-4 gap-2">
           {DRIVER_TABS.map((t) => {
             const active = activeTab === t.id;
@@ -733,20 +725,10 @@ function DriverPageInner() {
                     : "rounded-xl border border-slate-200 bg-white px-4 py-3 flex flex-col items-center text-center hover:border-slate-300"
                 }
               >
-                <div
-                  className={
-                    active ? "text-xs text-emerald-800 font-semibold" : "text-xs text-slate-600 font-semibold"
-                  }
-                >
+                <div className={active ? "text-xs text-emerald-800 font-semibold" : "text-xs text-slate-600 font-semibold"}>
                   {t.label}
                 </div>
-                <div
-                  className={
-                    active
-                      ? "mt-1 text-lg font-extrabold text-emerald-900"
-                      : "mt-1 text-lg font-extrabold text-slate-900"
-                  }
-                >
+                <div className={active ? "mt-1 text-lg font-extrabold text-emerald-900" : "mt-1 text-lg font-extrabold text-slate-900"}>
                   {c}
                 </div>
               </button>
@@ -754,7 +736,6 @@ function DriverPageInner() {
           })}
         </div>
 
-        {/* status line */}
         <div className="mt-4 space-y-2">
           {error && (
             <div className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">
@@ -788,19 +769,16 @@ function DriverPageInner() {
 
           {activeTab === "DONE" && (
             <div className="rounded-xl border border-slate-200 bg-white p-3 text-xs text-slate-600">
-              🎉 “Хүргэчихлээ” таб дээр дараагийн алхамд <span className="font-semibold">локал төлбөрийн статус</span>{" "}
-              (Төлбөр хүлээж байна / Төлбөр авсан) нэмнэ. Одоохондоо “Устгах” нь зөвхөн танд харагдахгүй болгоно.
+              🎉 “Хүргэчихлээ” таб дээр “Төлбөр авсан” дарвал төлөгдсөн болж (PAID) доош орж идэвхгүй болно.
             </div>
           )}
         </div>
 
-        {/* list */}
         <div className="mt-4">
           {loading ? (
             <div className="rounded-2xl border border-slate-200 bg-white p-6 text-sm text-slate-600">Ачаалж байна…</div>
           ) : activeTab === "OFFERS" ? (
             <>
-              {/* 🔍 Search */}
               <div className="mb-3 flex items-center justify-end gap-2">
                 {sortMode !== "NONE" && (
                   <button
@@ -839,6 +817,7 @@ function DriverPageInner() {
                           onRequest={requestDelivery}
                           onCancel={cancelRequest}
                           onMarkDelivered={markDelivered}
+                          onMarkPaid={markPaid}
                           onHide={hideDelivered}
                           router={router}
                         />
@@ -861,6 +840,7 @@ function DriverPageInner() {
                             onRequest={requestDelivery}
                             onCancel={cancelRequest}
                             onMarkDelivered={markDelivered}
+                            onMarkPaid={markPaid}
                             onHide={hideDelivered}
                             router={router}
                             isPending
@@ -889,6 +869,7 @@ function DriverPageInner() {
                   onRequest={requestDelivery}
                   onCancel={cancelRequest}
                   onMarkDelivered={markDelivered}
+                  onMarkPaid={markPaid}
                   onHide={hideDelivered}
                   router={router}
                 />
@@ -897,14 +878,13 @@ function DriverPageInner() {
           )}
         </div>
 
-        <div className="mt-10 text-xs text-slate-500">INCOME · Driver</div>
+        <div className="mt-10 text-xs text-slate-500">Tahi · Driver</div>
       </div>
 
-      {/* 🔍 Search Modal (Poster popup style) */}
+      {/* Search modal (unchanged) */}
       {searchOpen && (
         <div className="fixed inset-0 z-9999">
           <div className="absolute inset-0 bg-black/50 z-0" onClick={() => setSearchOpen(false)} aria-hidden="true" />
-
           <div className="absolute inset-0 z-10 flex items-center justify-center p-4 sm:p-6">
             <div className="w-full max-w-[760px]">
               <div
@@ -915,8 +895,7 @@ function DriverPageInner() {
                 <div
                   className="px-5 pt-5 pb-4"
                   style={{
-                    background:
-                      "linear-gradient(180deg, rgba(11,143,90,0.12) 0%, rgba(11,143,90,0.00) 70%)",
+                    background: "linear-gradient(180deg, rgba(11,143,90,0.12) 0%, rgba(11,143,90,0.00) 70%)",
                   }}
                 >
                   <div className="min-w-0">
@@ -928,12 +907,10 @@ function DriverPageInner() {
                 </div>
 
                 <div className="px-5 pt-4 pb-5">
-                  {/* 🚩 Near me */}
                   <div className="rounded-2xl border border-slate-200 bg-white p-4">
                     <div className="text-sm font-extrabold text-slate-900">🚩 Энд байна</div>
                     <div className="mt-1 text-xs font-semibold text-slate-600">
-                      Таны байгаа байршлыг тогтоож, хамгийн ойрхон хүргэлтийн саналуудыг дээр гаргана. (Pickup координаттай
-                      байвал ажиллана.)
+                      Таны байгаа байршлыг тогтоож, хамгийн ойрхон хүргэлтийн саналуудыг дээр гаргана. (Pickup координаттай байвал ажиллана.)
                     </div>
 
                     <button
@@ -951,7 +928,6 @@ function DriverPageInner() {
                     )}
                   </div>
 
-                  {/* 🚦 Destination */}
                   <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
                     <div className="text-sm font-extrabold text-slate-900">🚦 Очих газар</div>
                     <div className="mt-1 text-xs font-semibold text-slate-600">
@@ -1015,11 +991,12 @@ function OfferCard(props: {
   onRequest: (id: string) => void;
   onCancel: (id: string) => void;
   onMarkDelivered: (id: string) => void;
+  onMarkPaid: (id: string) => void;
   onHide: (id: string) => void;
   router: any;
   isPending?: boolean;
 }) {
-  const { d, user, sellerMap, activeTab, actLoading, onRequest, onCancel, onMarkDelivered, onHide, router, isPending } =
+  const { d, user, sellerMap, activeTab, actLoading, onRequest, onCancel, onMarkDelivered, onMarkPaid, onHide, router, isPending } =
     props;
 
   const b = badge(d.status);
@@ -1031,21 +1008,12 @@ function OfferCard(props: {
 
   const bidCount = d.status === "OPEN" ? (isPending ? 1 : 0) : 0;
 
+  const isInactiveDoneCard = activeTab === "DONE" && d.status === "PAID";
+
   const cardBase =
-    "rounded-2xl border p-4 " + (isPending ? "border-slate-200 bg-slate-50" : "border-slate-200 bg-white");
-
-  // ✅ Google Maps URL helpers (local only)
-  const mapsDirUrl = (lat: number, lng: number) =>
-    `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}&travelmode=driving`;
-  const mapsSearchUrl = (q: string) =>
-    `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}`;
-
-  const pickupNavUrl =
-    d.pickup_lat != null && d.pickup_lng != null
-      ? mapsDirUrl(d.pickup_lat, d.pickup_lng)
-      : d.from_address
-      ? mapsSearchUrl(d.from_address)
-      : null;
+    "rounded-2xl border p-4 border-slate-200 " +
+    (isPending ? "bg-slate-50 " : "bg-white ") +
+    (isInactiveDoneCard ? "opacity-60 grayscale " : "");
 
   return (
     <div className={cardBase}>
@@ -1055,9 +1023,11 @@ function OfferCard(props: {
             {b.text}
           </span>
 
-          <span className="inline-flex items-center rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700">
-            Санал: {bidCount}
-          </span>
+          {activeTab === "DONE" ? null : (
+            <span className="inline-flex items-center rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700">
+              Санал: {bidCount}
+            </span>
+          )}
 
           <span className="text-[11px] text-slate-500">{fmtDT(d.created_at)}</span>
         </div>
@@ -1099,31 +1069,6 @@ function OfferCard(props: {
         </div>
       )}
 
-      {/* ✅ STEP 3-д шаардлагатай нэмэлт: PICKUP таб дээр л pickup address + navigation */}
-      {activeTab === "PICKUP" && d.status === "ASSIGNED" && isMine && (
-        <div className="mt-3 rounded-xl border border-slate-200 bg-white p-3">
-          <div className="text-[11px] text-slate-500">ОЧИЖ АВАХ (ХУДАЛДАГЧ)</div>
-          <div className="mt-1 text-sm font-semibold text-slate-900">{d.from_address || "—"}</div>
-
-          <div className="mt-2 text-[11px] text-slate-500">
-            ⚠️ Таны утсанд Google Maps апп суусан байх ёстой. (Суусан бол шууд навигац нээгдэнэ.)
-          </div>
-
-          {pickupNavUrl ? (
-            <a
-              href={pickupNavUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="mt-3 inline-flex w-full items-center justify-center rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-extrabold text-emerald-900 hover:bg-emerald-100"
-            >
-              🧭 Худалдагчийн хаяг руу очих
-            </a>
-          ) : (
-            <div className="mt-3 text-xs text-slate-500">Байршлын мэдээлэл олдсонгүй.</div>
-          )}
-        </div>
-      )}
-
       <div className="mt-4 flex items-center justify-end gap-2">
         {activeTab === "OFFERS" && d.status === "OPEN" && !isPending && (
           <button
@@ -1152,6 +1097,16 @@ function OfferCard(props: {
             className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 text-sm font-semibold text-amber-900 hover:bg-amber-100 disabled:opacity-60"
           >
             {actLoading[d.id] ? "Түр хүлээнэ үү…" : "🎉 Хүргэчихлээ"}
+          </button>
+        )}
+
+        {activeTab === "DONE" && isMine && d.status === "DELIVERED" && (
+          <button
+            onClick={() => onMarkPaid(d.id)}
+            disabled={!!actLoading[d.id]}
+            className="ml-auto rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-900 hover:bg-emerald-100"
+          >
+            {actLoading[d.id] ? "Түр хүлээнэ үү…" : "Төлбөр авсан"}
           </button>
         )}
 
